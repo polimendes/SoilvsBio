@@ -1,0 +1,2393 @@
+#######################################################################################################################################################################################
+## Berenger Bourgeois # July 2021 # Modifications Poliana- August 2021 to October 2022
+## Dataset : Poliana vacant lots project
+#####################################################################################################################################################################################
+## Carbon storage and Infiltration responses to plant diversity in urban vacant lots
+rm(list=ls())
+#######################################################################################################################################################################################
+# SET THE DIRECTORY :
+setwd("C:\\Users\\pomen1\\OneDrive - Université Laval\\Resnet_Landscape2\\Projects\\soil_project\\data\\")
+#######################################################################################################################################################################################
+# LOAD THE PACKAGES :
+library(openxlsx); library(MuMIn);library(nlme);library(FSA);library(lmtest)
+library(car);library(emmeans) ; library(multcomp) ; library(FD) 
+library(vegan); library(Hmisc);library(CARBayes); library(spdep)
+library(mgcv); library(ggplot2);library(dplyr);library(stringr)
+library(ggrepel);library(gridExtra);library(multipanelfigure)
+
+windowsFonts(A = windowsFont("Times New Roman"))
+
+#######################################################################################################################################################################################
+# LOAD THE DATA
+data_VL = read.xlsx("./soil_vs_plant_table_LTC.xlsx", check.names=F,sheet = "Data", rowNames = F, colNames = T)
+#load functional traits data
+funct_group = read.xlsx("./soil_vs_plant_table_LTC.xlsx", sheet = "Traits", rowNames = F, colNames = T)
+#Make type of lot a factor
+data_VL$Type_Lot = factor(data_VL$Type_Lot, levels = c("Lawn", "BareSoil", "LowDensHerb", "HighDensHerb", "SparseTrees"))
+data_VL$Type2[data_VL$Type_Lot=="BareSoil"] <- "Bare Soil";data_VL$Type2[data_VL$Type_Lot=="Lawn"] <- "Lawn"
+data_VL$Type2[data_VL$Type_Lot=="LowDensHerb"] <- "Low-Density Herbaceous"
+data_VL$Type2[data_VL$Type_Lot=="HighDensHerb"] <- "High-Density Herbaceous"
+data_VL$Type2[data_VL$Type_Lot=="SparseTrees"] <- "Sparse Trees"
+#######################################################################################################################################################################################
+# Calculating species richness
+data_VL$spe_rich = specnumber(data_VL[, which(colnames(data_VL) == "Abies.balsamea"):which(colnames(data_VL) == "Vitis.riparia") ]) # calculate species richness
+
+# LOT TYPE EFFECT ON PLANT COMPOSITION (using PCA)
+##################################################
+spe = data_VL[, which(colnames(data_VL) == "Abies.balsamea"):which(colnames(data_VL) == "Vitis.riparia") ]
+rownames(spe) = data_VL$ID
+spe.hel = decostand(spe, method = "hellinger")
+spe_pca = rda(spe.hel) ; summary(spe_pca) ; plot(spe_pca)
+scores(spe_pca, choices=c(1,5), display=c("sites", "species"))
+
+# axis significance (Kaiser-Guttman criterion)
+ev = spe_pca$CA$eig;ev[ev > mean(ev)]
+sum(ev[1:57])/sum(ev) # 86% of the variation
+sum(ev[1:5])/sum(ev) # 32% of the variation
+ev[1]/sum(ev);ev[2]/sum(ev);ev[5]/sum(ev)
+
+# Add site scores to dataset (6 first axis)
+data_VL$PC1 = scores(spe_pca, choices = 1, display = "sites")
+data_VL$PC2 = scores(spe_pca, choices = 2, display = "sites")
+data_VL$PC3 = scores(spe_pca, choices = 3, display = "sites")
+data_VL$PC4 = scores(spe_pca, choices = 4, display = "sites")
+data_VL$PC5 = scores(spe_pca, choices = 5, display = "sites")
+
+### Creating PCA figure
+ii=summary(spe_pca)
+sp=as.data.frame(ii$species[,1:5])*2
+st=as.data.frame(ii$sites[,1:2]); yz=as.data.frame(ii$biplot[,1:2])
+grp=as.data.frame(data_VL$Type2)#Grouping by Square Type
+colnames(grp)="group";stg=as.data.frame(ii$sites[,1:2],group=grp$group)
+ord=ordiellipse(st,grp$group,conf=0.95,kind="sd")
+
+sp_fig<-sp%>% filter(rownames (sp) %in% c("Populus.balsamifera","Populus.tremuloides",
+                              "Poa.pratensis","Lathyrus.pratensis",
+                              "Taraxacum.officinale",
+                              "Fragaria.virginiana","Festuca.sp."))
+### Figure PCA
+COMP<-ggplot()+geom_point(data = st,aes(PC1,PC2,shape=grp$group,col=grp$group),size=2)+
+      scale_shape_manual(name="Land cover",labels=c("Lawn (LA)","Bare Soil (BS)","Low-Density Herbaceous (LDH)",
+                                                     "High-Density Herbaceous (HDH)","Sparse Trees (ST)"),
+                     values=c(17,15,17,17,19))+
+      scale_color_manual(name="land cover",labels=c("Lawn (LA)","Bare Soil (BS)","Low-Density Herbaceous (LDH)",
+                                                "High-Density Herbaceous (HDH)","Sparse Trees (ST)"),
+                   values=c("brown1","darkgoldenrod4","darkgoldenrod1","chartreuse2","chartreuse4"))+
+      labs(x=paste("PC 1 (", format(100 *ii$cont[[1]][2,1], digits=2), "%)", sep=""),
+                  y=paste("PC 2 (", format(100 *ii$cont[[1]][2,2], digits=2), "%)", sep=""))+
+  geom_hline(yintercept=0,linetype=3,size=0.5,color="grey")+ 
+  geom_vline(xintercept=0,linetype=3,size=0.5,color="grey")+
+  stat_ellipse(data=st,aes(PC1,PC2,shape=grp$group,col=grp$group),level=0.95,type="t")+
+  guides(shape=guide_legend(title="Land cover type",color="black"),
+        col=guide_legend(title="Land cover type"))+
+  ylim(-0.9,0.95)+xlim(-1.7,0.9)+
+  geom_segment(data = sp_fig,aes(x = 0, y = 0, xend = PC1, yend = PC2), 
+              arrow = arrow(angle=22.5,length = unit(0.2,"cm"),
+                           type = "closed"),linetype=1, size=0.5,colour = "black")+
+  theme_bw()+theme(panel.grid=element_blank(),axis.text = element_text(size=12),
+                   axis.title.x = element_text(size=12),axis.title.y = element_text(size=12),
+                   legend.text = element_text(size=12),legend.title = element_text(size=14),
+                   text=element_text(family = "A"),legend.position = "right",
+                   legend.spacing.x = unit(0.2,"cm"),
+                   legend.spacing.y = unit(0.5,"cm"),
+                   legend.key.height = unit(1.0,"cm"))+
+  annotate(geom="text",x=-0.4,y=0.95,label="Populus tremuloides",family="A",fontface="italic")+
+  annotate(geom="text",x=-0.53,y=0.57,label="Populus balsamifera",family="A",fontface="italic")+
+  annotate(geom="text",x=0.35,y=0.4,label="Fragaria\nvirginiana",family="A",fontface="italic")+
+  annotate(geom="text",x=0.60,y=-0.26,label="Festuca sp.",family="A",fontface="italic")+
+  annotate(geom="text",x=-0.05,y=-0.57,label="Poa pratensis",family="A",fontface="italic")+
+  annotate(geom="text",x=0.5,y=-0.9,label="Taraxacum officinale",family="A",fontface="italic")+
+  annotate(geom="text",x=-1.35,y=-0.64,label="Lathyrus pratensis",family="A",fontface="italic")
+COMP   
+
+  
+#### Figure E
+COMP_SP<-ggplot()+
+  geom_hline(yintercept=0,linetype=3,size=0.5) + 
+  geom_vline(xintercept=0,linetype=3,size=0.5)+
+  theme_bw()+theme(panel.grid=element_blank(),axis.text.x = element_text(size=12),
+                   axis.title.x = element_text(size=12),
+                   axis.text.y = element_text(size=12),
+                   axis.title.y = element_text(size=12),
+                   text=element_text(family = "A"))+
+  ylim(-0.9,0.95)+
+  geom_segment(data = sp,aes(x = 0, y = 0, xend = PC1, yend = PC5), 
+               arrow = arrow(angle=22.5,length = unit(0.2,"cm"),
+                             type = "closed"),linetype=1, size=0.5,colour = "gray")+
+  labs(x=paste("PC 1 (", format(100 *ii$cont[[1]][2,1], digits=2), "%)", sep=""),
+       y=paste("PC 5 (", format(100 *ii$cont[[1]][2,5], digits=2), "%)", sep=""))+
+  geom_text_repel(data = sp,aes(PC1,PC5,label=row.names(sp)),fontface = "italic",
+                  cex=4,max.overlaps = 80, family = "A",box.padding = 0.5)
+COMP_SP
+
+tiff(filename = "SM_PC5.tif",res=150,width=6,height=4,unit="in")
+COMP_SP
+dev.off()
+  
+###############################################
+# uniformize species name between dataset
+funct_group$Species = gsub(" ", ".", funct_group$Species) 
+check_name = ( funct_group$Species == colnames(data_VL[, which(colnames(data_VL) == "Abies.balsamea"):which(colnames(data_VL) == "Vitis.riparia") ]))
+funct_group$Species[which(check_name == F)]
+funct_group$Species[which(funct_group$Species == "Carex.bebbii.")] ="Carex.bebbii"
+funct_group$Species[which(funct_group$Species == "Carex.crawfordii.")] = "Carex.crawfordii"
+funct_group$Species[which(funct_group$Species == "Carya.ovata.")] = "Carya.ovata"
+funct_group$Species[which(funct_group$Species == "Cerastium.glomeratum")] = "Cerastium.fontanum"
+funct_group$Species[which(funct_group$Species == "Chamaenerion.angustifolium")] = "Chamerion.angustifolium"
+funct_group$Species[122] = "Persicaria.maculosa"
+funct_group$Species[123] = "Persicaria.sagittata"
+check_name = ( funct_group$Species == colnames(data_VL[, which(colnames(data_VL) == "Abies.balsamea"):which(colnames(data_VL) == "Vitis.riparia") ]))
+which(check_name == F)
+# calculate functional group richness
+unique(funct_group$Morphological_Descriptor)
+data_VL$Spe_rich_Tree = NA ; data_VL$Spe_rich_Forb = NA
+data_VL$Spe_rich_Herbaceous_Grass = NA ; data_VL$Spe_rich_Vine = NA ; data_VL$Spe_rich_Shrub = NA ; data_VL$Spe_rich_Fern = NA
+for (i in 1:nrow(data_VL)) {
+  Xsite = data_VL[i, which(colnames(data_VL) == "Abies.balsamea"):which(colnames(data_VL) == "Vitis.riparia")]
+  data_VL$Spe_rich_Tree[i] = length(which(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Tree")])]  > 0 ))
+  data_VL$Spe_rich_Forb[i] = length(which(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Forb")])]  > 0 )) 
+  data_VL$Spe_rich_Herbaceous_Grass[i] = length(which(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Herbaceous_Grass")])]  > 0 )) 
+  data_VL$Spe_rich_Vine[i] = length(which(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Vine")])]  > 0 )) 
+  data_VL$Spe_rich_Shrub[i] = length(which(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Shrub")])]  > 0 )) 
+  data_VL$Spe_rich_Fern[i] = length(which(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Fern")])]  > 0 ))  }
+# calculate functional group abundance
+unique(funct_group$Morphological_Descriptor)
+data_VL$TotAb = NA ; data_VL$Ab_Tree = NA ; data_VL$Ab_Forb = NA
+data_VL$Ab_Herbaceous_Grass = NA ; data_VL$Ab_Vine = NA ; data_VL$Ab_Shrub = NA ; data_VL$Ab_Fern = NA
+for (i in 1:nrow(data_VL)) {
+  Xsite = data_VL[i, which(colnames(data_VL) == "Abies.balsamea"):which(colnames(data_VL) == "Vitis.riparia")]
+  data_VL$TotAb[i] = sum(Xsite)
+  data_VL$Ab_Tree[i] = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Tree")])]) 
+  data_VL$Ab_Forb[i] = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Forb")])]) 
+  data_VL$Ab_Herbaceous_Grass[i] = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Herbaceous_Grass")])]) 
+  data_VL$Ab_Vine[i] = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Vine")])]) 
+  data_VL$Ab_Shrub[i] = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Shrub")])]) 
+  data_VL$Ab_Fern[i] = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(funct_group$Morphological_Descriptor == "Fern")])])  }
+
+data_VL$RichExpTS = data_VL$Spe_rich_Forb+data_VL$Spe_rich_Herbaceous_Grass+data_VL$Spe_rich_Fern+data_VL$Spe_rich_Vine
+
+########################### FUNCTIONAL DIVERSITY ######################################################
+###############################################
+#Trait database excluded individuals non-identified at species level
+traits_VL = read.xlsx("./Traits_Clean_3.xlsx", sheet = "Traits", rowNames = T, colNames = T)
+traits2<-traits_VL[,2:8]
+############ Abundance data ##################
+data_VL2 = read.xlsx("./abund.xlsx", sheet = "Data", rowNames = F, colNames = T)
+class(data_VL2$Type_Lot)
+data_VL2$Type_Lot = factor(data_VL2$Type_Lot, levels = c("Lawn","BareSoil", "LowDensHerb", "HighDensHerb", "SparseTrees"))
+commu<-data_VL2[, which(colnames(data_VL2) == "Abies_balsamea"):which(colnames(data_VL2) == "Vitis_riparia") ]
+data_VL2$Sand = data_VL2$Type_Soil_Simple # put together Loamy Sand and Sand
+data_VL2$Sand[which(data_VL2$Sand == "Loamy Sand")] = "Sand"
+dbfd2<-dbFD(traits2,commu,corr="cailliez", calc.FGR=FALSE)
+data_VL$FDis=dbfd2$FDis
+
+### Lot Effect on main response variables###############################################
+
+sr_lot = lme(spe_rich ~ Type_Lot,data = data_VL,
+             random = ~ 1|Lot)
+res_sr_lot = residuals(sr_lot)
+shapiro.test(res_sr_lot)
+leveneTest(res_sr_lot ~ Type_Lot, data = data_VL)
+anova(sr_lot,type="marginal"); r.squaredGLMM(sr_lot)
+compmod_sr_lot = emmeans(sr_lot, ~ Type_Lot); cld(compmod_sr_lot)
+summary(sr_lot)
+
+#jpeg("richness.jpeg",quality=300)
+SR_LOT<-ggplot(data = data_VL, aes(Type_Lot,spe_rich,fill=Type_Lot))+ ylim(0,28)+
+  geom_boxplot(notch = F, size=0.35)+
+  theme_classic()+
+  theme(axis.text.y=element_text(size=12),
+        axis.text.x=element_text(size=12,angle=45,hjust=1),
+        axis.title.y=element_text(size=12),
+        legend.position="none",text=element_text(family = "A"))+
+  labs(x="",y="Species Richness")+
+  geom_text(x= 1, y= 27, label= "a",size=4, family = "A")+
+  geom_text(x= 2, y= 27, label= "ab",size=4, family = "A")+
+  geom_text(x= 3, y= 27, label= "ab",size=4, family = "A")+
+  geom_text(x= 4, y= 27, label = "ab",size=4, family = "A")+
+  geom_text(x=5, y= 27, label="b",size=4, family = "A")+
+  scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+ 
+  scale_fill_manual(values=c("brown1","darkgoldenrod4",
+                             "darkgoldenrod1","chartreuse2",
+                             "chartreuse4"))+ggtitle(label="LMM"~r^2~"= 0.21 p = 0.005")
+
+SR_LOT
+
+ab_lot = lme(TotAb^(1/3) ~ Type_Lot,data = data_VL,
+             random = ~ 1|Lot,
+             cor = corSpatial(form = ~ Longitude + Latitude))
+res_ab_lot = residuals(ab_lot)
+shapiro.test(res_ab_lot)
+leveneTest(res_ab_lot ~ Type_Lot, data = data_VL)
+anova(ab_lot,type="marginal"); r.squaredGLMM(ab_lot)
+summary(ab_lot)
+compmod_ab_lot = emmeans(ab_lot, specs = pairwise ~ Type_Lot); cld(compmod_ab_lot)
+
+
+AB_LOT<-ggplot(data = data_VL, aes(Type_Lot,TotAb^(1/3),fill=Type_Lot))+ 
+  ylim(2,7)+
+  geom_boxplot(notch = F, size=0.35)+
+  theme_classic()+
+  theme(axis.text.y=element_text(size=12),axis.text.x=element_text(size=12,angle=45,hjust=1),
+        axis.title.y=element_text(size=12),
+        legend.position="none",text=element_text(family = "A"))+
+  labs(x="",y=bquote("Total Cover"^"1/3"))+
+  geom_text(x= 1, y= 7, label= "c",size=4, family = "A")+
+  geom_text(x= 2, y= 7, label= "a",size=4, family = "A")+
+  geom_text(x= 3, y= 7, label= "b",size=4, family = "A")+
+  geom_text(x= 4, y= 7, label = "c",size=4, family = "A")+
+  geom_text(x=5, y= 7, label="d",size=4, family = "A")+
+  scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+ 
+  scale_fill_manual(values=c("brown1","darkgoldenrod4",
+                             "darkgoldenrod1","chartreuse2",
+                             "chartreuse4"))+ggtitle(label="LMM"~r^2~"= 0.76 p < 0.001")
+AB_LOT
+
+
+fdis_lot = lme(sqrt(FDis) ~ Type_Lot,data = data_VL,
+             random = ~ 1|Lot,
+             cor = corSpatial(form = ~ Longitude + Latitude))
+res_fdis_lot = residuals(fdis_lot)
+shapiro.test(res_fdis_lot)
+leveneTest(res_fdis_lot ~ Type_Lot, data = data_VL)
+anova(fdis_lot,type="marginal"); r.squaredGLMM(fdis_lot)
+summary(fdis_lot)
+compmod_fdis_lot = emmeans(fdis_lot, ~ Type_Lot); cld(compmod_fdis_lot)
+
+FDIS_LOT<-ggplot(data = data_VL, aes(Type_Lot,sqrt(FDis),fill=Type_Lot))+ ylim(0.2,0.65)+
+  geom_boxplot(notch = F, size=0.35)+
+  theme_classic()+
+  theme(axis.text.y=element_text(size=12),axis.text.x=element_text(size=12,angle=45,hjust=1),
+        axis.title.y=element_text(size=12),
+        legend.position = "none",text=element_text(family = "A"))+
+  labs(x="",y=expression(sqrt("Functional Dispersion")))+
+  geom_text(x= 1, y= 0.65, label= "b",size=4,family = "A")+
+  geom_text(x= 2, y= 0.65, label= "a",size=4, family = "A")+
+  geom_text(x= 3, y= 0.65, label= "b",size=4, family = "A")+
+  geom_text(x= 4, y= 0.65, label = "b",size=4, family = "A")+
+  geom_text(x=5, y= 0.65, label="ab",size=4, family = "A")+
+  scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+ 
+  scale_fill_manual(values=c("brown1","darkgoldenrod4",
+                             "darkgoldenrod1","chartreuse2",
+                             "chartreuse4"))+ggtitle(label="LMM"~r^2~"= 0.14 p = 0.012")
+FDIS_LOT
+
+library(cowplot)
+legend<-cowplot::get_legend(COMP)
+plot(legend)
+
+tiff(filename="Figure1_composite_new32_lowres2.tiff",res=150,width=8.5, height=6.5, units="in")
+figure1<- multi_panel_figure(columns=18,rows=2, panel_label_type = "none")
+figure1%<>%
+   fill_panel(SR_LOT,column = 1:6, row=1)%<>%
+   fill_panel(AB_LOT,column=7:12,row=1)%<>%
+   fill_panel(FDIS_LOT,column=13:18, row=1)%<>%
+   fill_panel(COMP,column=1:18,row=2)
+#%<>%
+ #  fill_panel(COMP_SP,column=1:5,row=2)
+ figure1
+ dev.off()
+ 
+#####################################################################################################################################################################################
+##################################### CARBON TIME!!!! ##############################################################################################################################
+####################################################################################################################################################################################
+##############################################################################################################################################################################
+
+# INVESTIGATING THE COVARIATE EFFECT ON CARBON STORAGE
+#Correlation among covariates
+cor.table = data_VL[,c("Compacteness","Date.Vacant","Date.Deforested","Sand","Clay","Silt")]
+cor = cor(cor.table,method="pearson")
+rcorr(as.matrix(cor.table), type ="pearson")
+
+## Preparing data for I de Moran test
+data_VL_coords <- data_VL;coordinates(data_VL_coords) <- ~ Longitude + Latitude
+IDs <- row.names(as(data_VL, "data.frame"))
+# # #Queen neighbors , 10 was an arbitraty value decided after looking at neighbors matrix for diff values
+Sy8_nb <- knn2nb(knearneigh(coordinates(data_VL_coords), k=3,longlat=TRUE))
+dsts <- unlist(nbdists(Sy8_nb, coordinates(data_VL_coords)))
+summary(dsts)
+knea<-dnearneigh(coordinates(data_VL_coords),0,6.5,longlat=TRUE)
+neib <- knea; nb<-neib
+# # #plot matrix
+plot(data_VL_coords);plot(nb, coordinates(data_VL_coords), col='red', lwd=2, add=TRUE)
+# # neighbors
+lw <- nb2listw(neib,zero.policy=TRUE)
+
+
+#Covariates Model
+mod_C_cov = lme(sqrt(Cmass_10cm_Kgm2) ~ Sand + Compacteness + Date.Deforested + Date.Vacant, 
+                random = ~ 1 | Lot, 
+                data = data_VL,method="REML")
+mod_C_cov_gam = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Sand,k=8) + s(Compacteness) + s(Date.Deforested,k=5) + 
+                       s(Date.Vacant,k=5) + te(Latitude,Longitude),random=list(Lot=~1), 
+                     data = data_VL, method="REML")
+res_mod_C_cov = residuals(mod_C_cov, type="pearson", scaled=TRUE);shapiro.test(res_mod_C_cov)
+anova(mod_C_cov, type = "marginal");r.squaredGLMM(mod_C_cov)
+RSS<-c(crossprod(res_mod_C_cov));MSE<-RSS/length(res_mod_C_cov);RMSE<-sqrt(MSE);RMSE
+
+res_mod_C_cov_gam = residuals(mod_C_cov_gam$gam, method="pearson",scaled=T)
+##moran.mc(res_mod_C_cov_gam,lw,10000,zero.policy=T)
+gam.check(mod_C_cov_gam$gam)
+anova(mod_C_cov_gam$gam);summary(mod_C_cov_gam$gam)
+RSS<-c(crossprod(res_mod_C_cov_gam));MSE<-RSS/length(res_mod_C_cov_gam);RMSE<-sqrt(MSE);RMSE
+AIC(mod_C_cov);AIC(mod_C_cov_gam)
+
+# #spatial structure
+data_VL$residuals = residuals(mod_C_cov, type="pearson", scaled=TRUE)
+ggplot(data_VL, aes(Longitude, Latitude, colour = residuals)) +
+scale_colour_gradientn(colours = terrain.colors(10)) +
+geom_point(size = 3)
+moran.mc(res_mod_C_cov, lw, 10000,zero.policy=TRUE)
+moran.mc(res_mod_C_cov_gam, lw, 10000,zero.policy=TRUE)
+
+
+############################################################################################################
+### BASELINE MODEL
+m_C_soil = lme(sqrt(Cmass_10cm_Kgm2) ~ Sand, random = ~1| Lot, data=data_VL, method="REML")
+res_modC_soil = residuals(m_C_soil,type="pearson",scaled=TRUE)
+shapiro.test(res_modC_soil)
+anova(m_C_soil,type="marginal");r.squaredGLMM(m_C_soil)
+moran.mc(res_modC_soil, lw, 10000,zero.policy=TRUE)
+RSS<-c(crossprod(res_modC_soil));MSE<-RSS/length(res_modC_soil);RMSE<-sqrt(MSE);RMSE
+AIC(m_C_soil)
+
+m_C_soil_gam = gamm(sqrt(Cmass_10cm_Kgm2) ~s(Sand,k=8) +te(Latitude,Longitude), 
+                    random=list(Lot=~1),data = data_VL,method="REML")
+res_m_C_soil_gam = residuals.gam(m_C_soil_gam$gam,type="pearson")
+RSS<-c(crossprod(res_m_C_soil_gam));MSE<-RSS/length(res_m_C_soil_gam);RMSE<-sqrt(MSE);RMSE
+moran.mc(res_m_C_soil_gam, lw, 10000,zero.policy=TRUE)
+gam.check(m_C_soil_gam$gam);summary(m_C_soil_gam$gam);AIC(m_C_soil_gam)
+
+#making a figure
+m_C_soil_gam = gamm(sqrt(Cmass_10cm_Kgm2) ~s(Sand,k=8), 
+                    random=list(Lot=~1),data = data_VL,method="REML")
+newdata= data.frame(Sand=rep(seq(0,100,1),each=150),Lot=seq(1,150,1))
+summary(m_C_soil_gam$gam)
+a = predict(m_C_soil_gam,newdata,se.fit = T, level=0)
+newdata$fit = a$fit; newdata$se.fit = a$se.fit
+new = newdata %>% group_by(Sand) %>% summarize(fit = median(fit), 
+                upper = median(fit)+median(se.fit*1.96),
+                lower = median(fit) - median(se.fit*1.96))
+
+SAND<-ggplot(data = data_VL, aes(Sand,sqrt(Cmass_10cm_Kgm2)))+ theme_classic()+
+  geom_point(alpha=0.5)+labs(x="Sand %", y= expression(sqrt("C mass (Kg/"~m^2~")")))+
+  theme(title=element_text(size=18),axis.text.y=element_text(size=18),axis.text.x=element_text(size=18),
+        axis.title.y=element_text(size=24),
+        axis.title.x = element_text(size=24),text=element_text(family="A"))+
+  geom_line(data=new,aes(y=fit), size=1)+
+        geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15,
+             outline.type="full")+
+  scale_y_continuous(labels=paste(seq(1,3,1)),breaks=seq(1,3,1),limits=c(0.5,3))+
+  ggtitle(label="GAMM"~r^2~"=0.20 p < 0.001")
+SAND
+
+# LOT TYPE EFFECT ON CARBON STORAGE (from baseline model)
+modCmass_lot_type = lme(sqrt(Cmass_10cm_Kgm2) ~ Type_Lot + Sand, 
+                        random = ~ 1 | Lot, data = data_VL,method="REML",
+                        #corr = corSpatial(form = ~ Longitude + Latitude, type = "spherical", nugget = F)
+                        )
+res_modCmass_lot_type = residuals(modCmass_lot_type, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_lot_type)  ; hist(res_modCmass_lot_type)
+leveneTest(res_modCmass_lot_type,group=data_VL$Type_Lot,data=data_VL)
+anova(m_C_soil,modCmass_lot_type)
+anova(modCmass_lot_type,type="marginal");r.squaredGLMM(modCmass_lot_type)
+compmodC_lot_type = emmeans(modCmass_lot_type, ~ Type_Lot) ; cld(compmodC_lot_type)
+moran.mc(res_modCmass_lot_type, lw, 10000,zero.policy=TRUE)
+
+
+#jpeg("Figure_B.jpeg", res =300, width=7, height=7, units="in")
+C_TYPE<-ggplot(data = data_VL, aes(Type_Lot,sqrt(Cmass_10cm_Kgm2),
+                              fill=Type_Lot))+ 
+  ylim(0.4,3.5)+
+    geom_boxplot(notch = F, size=0.70)+
+    theme_classic()+
+    theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+          axis.title.x=element_blank(),axis.title.y = element_blank(),
+          text=element_text(family="A"))+
+    labs(x="",y=expression(sqrt("C mass (Kg/"~m^2~")")))+
+    geom_text(x= 1, y= 3.1, label= "c",size=6, family="A")+
+    geom_text(x= 2, y= 3.1, label= "a",size=6, family="A")+
+    geom_text(x= 3, y= 3.1, label= "bc",size=6, family="A")+
+    geom_text(x= 4, y= 3.1, label = "bc",size=6, family="A")+
+    geom_text(x=5, y=3.1, label="b",size=6, family="A")+theme(legend.position="none")+
+  theme(axis.text.x = element_text(angle = 35, vjust = 1, hjust=1),title=element_text(size=18))+
+  scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+
+  scale_fill_manual(values=c("brown1","darkgoldenrod4",
+                             "darkgoldenrod1","chartreuse2",
+                             "chartreuse4"))+
+                               ggtitle(label="LMM"~r^2~"= 0.46 p < 0.001")+
+  annotate(geom="text",label="4.8")
+C_TYPE
+
+#######################################################################################################################################################################################
+# TOTAL/GROUP RICHNESS EFFECT ON CARBON STORAGE (from baseline model)
+######################################################################
+modCmass_spe_rich = lme(sqrt(Cmass_10cm_Kgm2) ~  spe_rich + Sand, 
+                        random =  ~ 1 | Lot, method = "REML", data = data_VL)  
+res_modCmass_spe_rich = residuals(modCmass_spe_rich, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_spe_rich)  ; hist(res_modCmass_spe_rich)
+moran.mc(res_modCmass_spe_rich, lw, 10000,zero.policy=TRUE)
+anova(modCmass_spe_rich,type="marginal");anova(m_C_soil,modCmass_spe_rich);AIC(modCmass_spe_rich)
+RSS<-c(crossprod(res_modCmass_spe_rich));MSE<-RSS/length(res_modCmass_spe_rich);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_srich = gamm(sqrt(Cmass_10cm_Kgm2)~s(spe_rich)+s(Sand,k=8)+te(Latitude,Longitude), 
+                     random=list(Lot=~1), method="REML",data = data_VL)
+res_modC_gam_srich= residuals(modC_gam_srich$gam, type="pearson", scaled=TRUE)
+moran.mc(res_modC_gam_srich, lw, 10000,zero.policy=TRUE)
+gam.check(modC_gam_srich$gam);summary(modC_gam_srich$gam);AIC(modC_gam_srich)
+RSS<-c(crossprod(res_modC_gam_srich));MSE<-RSS/length(res_modC_gam_srich);RMSE<-sqrt(MSE);RMSE
+
+########################### Tree Richness###############################
+modCmass_Tree_rich = lme(sqrt(Cmass_10cm_Kgm2) ~ Spe_rich_Tree + Sand, 
+                         random =  ~ 1 | Lot, method = "REML", data = data_VL)   
+res_modCmass_Tree_rich = residuals(modCmass_Tree_rich, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_Tree_rich)  ; hist(res_modCmass_Tree_rich)
+moran.mc(res_modCmass_Tree_rich, lw, 10000,zero.policy=TRUE)
+anova(modCmass_Tree_rich);anova(modCmass_Tree_rich,m_C_soil);AIC(modCmass_Tree_rich)
+RSS<-c(crossprod(res_modCmass_Tree_rich));MSE<-RSS/length(res_modCmass_Tree_rich);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_srich_tree = gamm(sqrt(Cmass_10cm_Kgm2)~s(Spe_rich_Tree,k=7) + s(Sand,k=8)+te(Latitude,Longitude), 
+                           random=list(Lot=~1),method = "REML", data = data_VL)
+res_modC_gam_srich_tree = residuals(modC_gam_srich_tree$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_srich_tree, lw, 10000,zero.policy=TRUE)
+gam.check(modC_gam_srich_tree$gam)
+anova(modC_gam_srich_tree$gam);lrtest(modC_gam_srich_tree,m_C_soil_gam);AIC(modC_gam_srich_tree)
+RSS<-c(crossprod(res_modC_gam_srich_tree));MSE<-RSS/length(res_modC_gam_srich_tree);RMSE<-sqrt(MSE);RMSE
+
+########Shrub#######################
+modCmass_Shrub_rich = lme(sqrt(Cmass_10cm_Kgm2) ~  Spe_rich_Shrub + Sand, 
+                          random =  ~ 1 | Lot, method = "REML", data = data_VL)   
+res_modCmass_Shrub_rich = residuals(modCmass_Shrub_rich, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_Shrub_rich)  ; hist(res_modCmass_Shrub_rich)
+moran.mc(res_modCmass_Shrub_rich, lw, 10000,zero.policy=TRUE)
+anova(modCmass_Shrub_rich);anova(modCmass_Shrub_rich,m_C_soil);AIC(modCmass_Shrub_rich)
+RSS<-c(crossprod(res_modCmass_Shrub_rich));MSE<-RSS/length(res_modCmass_Shrub_rich);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_srich_shr = gamm(sqrt(Cmass_10cm_Kgm2) ~  s(Spe_rich_Shrub, k=5) + s(Sand,k=8) + te(Latitude,Longitude), 
+                          random=list(Lot=~1),method = "REML", data = data_VL)
+res_modC_gam_srich_shr = residuals(modC_gam_srich_shr$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_srich_shr, lw, 10000,zero.policy=TRUE)
+gam.check(modC_gam_srich_shr$gam)
+anova(modC_gam_srich_shr$gam);AIC(modC_gam_srich_shr)
+RSS<-c(crossprod(res_modC_gam_srich_shr));MSE<-RSS/length(res_modC_gam_srich_shr);RMSE<-sqrt(MSE);RMSE
+
+############### GRass##########
+modCmass_Herbaceous_Grass_rich = lme(sqrt(Cmass_10cm_Kgm2) ~ Spe_rich_Herbaceous_Grass + Sand, 
+                                     random =  ~ 1 | Lot, method = "REML", data = data_VL)   
+res_modCmass_Herbaceous_Grass_rich = residuals(modCmass_Herbaceous_Grass_rich, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_Herbaceous_Grass_rich)  ; hist(res_modCmass_Herbaceous_Grass_rich)
+moran.mc(res_modCmass_Herbaceous_Grass_rich, lw, 10000,zero.policy=TRUE)
+anova(modCmass_Herbaceous_Grass_rich);AIC(modCmass_Herbaceous_Grass_rich)
+RSS<-c(crossprod(res_modCmass_Herbaceous_Grass_rich));MSE<-RSS/length(res_modCmass_Herbaceous_Grass_rich);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_srich_grass = gamm(sqrt(Cmass_10cm_Kgm2) ~  s(Spe_rich_Herbaceous_Grass,k=8) + s(Sand,k=8) +
+                              te(Latitude,Longitude), 
+                            random=list(Lot=~1),method = "REML", data = data_VL)
+res_modC_gam_srich_grass = residuals(modC_gam_srich_grass$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_srich_grass, lw, 10000,zero.policy=TRUE)
+gam.check(modC_gam_srich_grass$gam)
+anova(modC_gam_srich_grass$gam);AIC(modC_gam_srich_grass)
+RSS<-c(crossprod(res_modC_gam_srich_grass));MSE<-RSS/length(res_modC_gam_srich_grass);RMSE<-sqrt(MSE);RMSE
+
+############### Forb #####
+modCmass_Forb_rich = lme(sqrt(Cmass_10cm_Kgm2) ~ Spe_rich_Forb + Sand, 
+                         random =  ~ 1 | Lot, method = "REML", data = data_VL)  
+res_modCmass_Forb_rich = residuals(modCmass_Forb_rich, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_Forb_rich)  ; hist(res_modCmass_Forb_rich)
+moran.mc(res_modCmass_Forb_rich, lw, 10000,zero.policy=TRUE)
+anova(modCmass_Forb_rich);AIC(modCmass_Forb_rich)
+RSS<-c(crossprod(res_modCmass_Forb_rich));MSE<-RSS/length(res_modCmass_Forb_rich);RMSE<-sqrt(MSE);RMSE
+
+
+modC_gam_srich_forb = gamm(sqrt(Cmass_10cm_Kgm2) ~  s(Spe_rich_Forb) + s(Sand,k=8) + te(Latitude,Longitude), 
+                           random=list(Lot=~1),method = "REML", data = data_VL)
+res_modC_gam_srich_forb = residuals(modC_gam_srich_forb$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_srich_forb, lw, 10000,zero.policy=TRUE)
+gam.check(modC_gam_srich_forb$gam)
+anova(modC_gam_srich_forb$gam);AIC(modC_gam_srich_forb)
+RSS<-c(crossprod(res_modC_gam_srich_forb));MSE<-RSS/length(res_modC_gam_srich_forb);RMSE<-sqrt(MSE);RMSE
+
+#######################################################################################################################################################################################
+# TOTAL/GROUP ABUNDANCE EFFECT ON CARBON STORAGE (from baseline model)
+######################################################################
+modCmass_TotAb_lin = lme(sqrt(Cmass_10cm_Kgm2) ~ TotAb + Sand, 
+                         random =  ~ 1 | Lot, method = "REML", data = data_VL)    
+res_modCmass_TotAb_lin = residuals(modCmass_TotAb_lin)
+shapiro.test(res_modCmass_TotAb_lin)
+moran.mc(res_modCmass_TotAb_lin, lw, 10000,zero.policy=TRUE)
+anova(modCmass_TotAb_lin);AIC(modCmass_TotAb_lin)
+RSS<-c(crossprod(res_modCmass_TotAb_lin));MSE<-RSS/length(res_modCmass_TotAb_lin);RMSE<-sqrt(MSE);RMSE
+#### TRYING GAMM
+modCmass_TotAb_gam = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(TotAb) + s(Sand,k=8)+te(Latitude,Longitude),
+                          random=list(Lot=~1),method = "REML", data = data_VL) 
+res_modCmass_TotAb_gam = residuals(modCmass_TotAb_gam$gam,type="pearson",scaled=T)
+moran.mc(res_modCmass_TotAb_gam, lw, 10000,zero.policy=TRUE)
+gam.check(modCmass_TotAb_gam$gam)
+anova(modCmass_TotAb_gam$gam);AIC(modCmass_TotAb_gam);summary(modCmass_TotAb_gam$gam)
+RSS<-c(crossprod(res_modCmass_TotAb_gam));MSE<-RSS/length(res_modCmass_TotAb_gam);RMSE<-sqrt(MSE);RMSE
+
+modCmass_TotAb_gam = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(TotAb) + s(Sand,k=8),
+                          random=list(Lot=~1),method = "REML", data = data_VL) 
+newdata = data.frame(TotAb=rep(seq(1,252,1),each=15000),Lot=rep(seq(1,150,1),each=100),Sand=seq(1,100,1))
+a<- predict(modCmass_TotAb_gam, newdata=newdata, se.fit=T, level=0)
+newdata$fit = a$fit;newdata$se.fit = a$se.fit
+new =newdata %>% group_by(TotAb)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+#jpeg(filename="Figure_C.jpeg",res=300, width=7, height=7, units="in")
+C_AB<-ggplot(data= data_VL,aes(TotAb,sqrt(Cmass_10cm_Kgm2)))+theme_classic()+
+  geom_point()+
+  labs(y="C mass (Kg/"~m^2~")",x="Total Cover")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_text(size=24),axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  scale_y_continuous(labels=paste(seq(1,3,1)),breaks=seq(1,3,1),limits=c(0.5,3))+
+  ggtitle(label="GAMM"~r^2~"= 0.38 p = 0.002")
+C_AB
+
+modCmass_Ab_Tree_lin = lme(sqrt(Cmass_10cm_Kgm2) ~ Ab_Tree + Sand, 
+                           random =  ~ 1 | Lot, method = "REML", data = data_VL)      
+res_modCmass_Ab_Tree_lin = residuals(modCmass_Ab_Tree_lin, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_Ab_Tree_lin)  ; hist(res_modCmass_Ab_Tree_lin)
+moran.mc(res_modCmass_Ab_Tree_lin, lw, 10000,zero.policy=TRUE)
+anova(modCmass_Ab_Tree_lin);AIC(modCmass_Ab_Tree_lin)
+RSS<-c(crossprod(res_modCmass_Ab_Tree_lin));MSE<-RSS/length(res_modCmass_Ab_Tree_lin);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_tree_ab = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Ab_Tree) + s(Sand,k=8) + te(Latitude,Longitude), 
+                        random=list(Lot=~1),method = "REML", data = data_VL)
+res_modC_gam_tree_ab = residuals(modC_gam_tree_ab$gam, type="pearson",scaled=T)
+moran.mc(res_modC_gam_tree_ab, lw, 10000,zero.policy=TRUE)
+gam.check(modC_gam_tree_ab$gam);anova(modC_gam_tree_ab$gam)
+AIC(modC_gam_tree_ab)
+RSS<-c(crossprod(res_modC_gam_tree_ab));MSE<-RSS/length(res_modC_gam_tree_ab);RMSE<-sqrt(MSE);RMSE
+
+modCmass_Ab_Shrub_lin = lme(sqrt(Cmass_10cm_Kgm2) ~ Ab_Shrub + Sand, 
+                            random =  ~ 1 | Lot, method = "REML", data = data_VL)      
+res_modCmass_Ab_Shrub_lin = residuals(modCmass_Ab_Shrub_lin, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_Ab_Shrub_lin)  ; hist(res_modCmass_Ab_Shrub_lin)
+moran.mc(res_modCmass_Ab_Shrub_lin, lw, 10000,zero.policy=TRUE)
+anova(modCmass_Ab_Shrub_lin);AIC(modCmass_Ab_Shrub_lin)
+RSS<-c(crossprod(res_modCmass_Ab_Shrub_lin));MSE<-RSS/length(res_modCmass_Ab_Shrub_lin);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_shrub_ab = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Ab_Shrub) + s(Sand,k=8)+te(Latitude,Longitude), 
+                         random=list(Lot=~1),method = "REML", data = data_VL)
+res_modC_gam_shrub_ab = residuals(modC_gam_shrub_ab$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_shrub_ab, lw, 10000,zero.policy=TRUE)
+gam.check(modC_gam_shrub_ab$gam);anova(modC_gam_shrub_ab$gam);AIC(modC_gam_shrub_ab)
+RSS<-c(crossprod(res_modC_gam_shrub_ab));MSE<-RSS/length(res_modC_gam_shrub_ab);RMSE<-sqrt(MSE);RMSE
+
+modCmass_Ab_Herbaceous_Grass_lin = lme(sqrt(Cmass_10cm_Kgm2) ~ Ab_Herbaceous_Grass +Sand, 
+                                       random =  ~ 1 | Lot, method = "REML", data = data_VL)        
+res_modCmass_Ab_Herbaceous_Grass_lin = residuals(modCmass_Ab_Herbaceous_Grass_lin, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_Ab_Herbaceous_Grass_lin)  ; hist(res_modCmass_Ab_Herbaceous_Grass_lin)
+moran.mc(res_modCmass_Ab_Herbaceous_Grass_lin, lw, 10000,zero.policy=TRUE)
+anova(modCmass_Ab_Herbaceous_Grass_lin);anova(modCmass_Ab_Herbaceous_Grass_lin,m_C_soil);AIC(modCmass_Ab_Herbaceous_Grass_lin)
+RSS<-c(crossprod(res_modCmass_Ab_Herbaceous_Grass_lin));MSE<-RSS/length(res_modCmass_Ab_Herbaceous_Grass_lin);RMSE<-sqrt(MSE);RMSE
+
+modC_fam_ab_grass_ab = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Ab_Herbaceous_Grass) + s(Sand,k=8) + te(Latitude,Longitude), 
+                            random=list(Lot=~1),method = "REML", data = data_VL)
+res_modC_fam_ab_grass_ab = residuals(modC_fam_ab_grass_ab$gam, type="pearson",scaled=T)
+moran.mc(res_modC_fam_ab_grass_ab, lw, 10000,zero.policy=TRUE)
+gam.check(modC_fam_ab_grass_ab$gam);anova.gam(modC_fam_ab_grass_ab$gam)
+lrtest(modC_fam_ab_grass_ab,m_C_soil_gam);AIC(modC_fam_ab_grass_ab)
+summary(modC_fam_ab_grass_ab$gam)
+RSS<-c(crossprod(res_modC_fam_ab_grass_ab));MSE<-RSS/length(res_modC_fam_ab_grass_ab);RMSE<-sqrt(MSE);RMSE
+
+modC_fam_ab_grass_ab = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Ab_Herbaceous_Grass) + s(Sand,k=8), 
+                            random=list(Lot=~1),method = "REML", data = data_VL)
+newdata = data.frame(Ab_Herbaceous_Grass=rep(seq(0,125,1),each=15000),Sand=rep(seq(1,100,1),each=150),Lot=seq(1,150,1))
+a<- predict(modC_fam_ab_grass_ab, newdata=newdata, se.fit=T,level=0)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new =newdata %>% group_by(Ab_Herbaceous_Grass)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+#jpeg(filename="Figure_D.jpeg",res=300, width=7, height=7, units="in")
+C_GRASS_AB<-ggplot(data= data_VL,aes(Ab_Herbaceous_Grass,sqrt(Cmass_10cm_Kgm2)))+theme_classic()+
+  geom_point()+
+  labs(y="C mass (Kg/"~m^2~")",x="Grass Cover")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  scale_y_continuous(labels=paste(seq(1,3,1)),breaks=seq(1,3,1),limits=c(0.5,3))+
+  ggtitle(label="GAMM"~r^2~"= 0.25 p = 0.016")
+
+C_GRASS_AB
+
+modCmass_Ab_Forb_lin = lme(sqrt(Cmass_10cm_Kgm2) ~ Ab_Forb + Sand, 
+                           random =  ~ 1 | Lot, method = "REML", data = data_VL,
+                           #cor = corSpatial(form = ~ Longitude + Latitude)
+                           )        
+res_modCmass_Ab_Forb_lin = residuals(modCmass_Ab_Forb_lin, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_Ab_Forb_lin)  ; hist(res_modCmass_Ab_Forb_lin)
+moran.mc(res_modCmass_Ab_Forb_lin, lw, 10000,zero.policy=TRUE)
+anova(modCmass_Ab_Forb_lin);anova(modCmass_Ab_Forb_lin,m_C_soil);AIC(modCmass_Ab_Forb_lin)
+RSS<-c(crossprod(res_modCmass_Ab_Forb_lin));MSE<-RSS/length(res_modCmass_Ab_Forb_lin);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_forb_ab = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Ab_Forb) + s(Sand,k=8) +te(Latitude,Longitude), 
+                       random=list(Lot=~1),method = "REML", data = data_VL)
+res_modC_gam_forb_ab = residuals(modC_gam_forb_ab$gam, type="pearson",scaled=T)
+moran.mc(res_modC_gam_forb_ab, lw, 10000,zero.policy=TRUE)
+anova.gam(modC_gam_forb_ab$gam);gam.check(modC_gam_forb_ab$gam)
+lrtest(modC_gam_forb_ab,m_C_soil_gam);AIC(modC_gam_forb_ab)
+summary(modC_gam_forb_ab$gam)
+RSS<-c(crossprod(res_modC_gam_forb_ab));MSE<-RSS/length(res_modC_gam_forb_ab);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_forb_ab = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Ab_Forb) + s(Sand,k=8), 
+                        random=list(Lot=~1),method = "REML", data = data_VL)
+newdata = data.frame(Ab_Forb=rep(seq(0,175,1),each=15000),Sand=rep(seq(1,100,1),each=150),Lot=seq(1,150,1))
+a<- predict(modC_gam_forb_ab, newdata=newdata, se.fit=T,level=0)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new =newdata %>% group_by(Ab_Forb)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+
+C_FORB_AB<-ggplot(data= data_VL,aes(Ab_Forb,sqrt(Cmass_10cm_Kgm2)))+
+  theme_classic()+
+  geom_point()+
+  labs(y=expression(sqrt("C mass (Kg/"~m^2~")")),x="Forb Cover")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  scale_y_continuous(labels=paste(seq(1,3,1)),breaks=seq(1,3,1),limits=c(0.5,3))+
+  ggtitle(label="GAMM"~r^2~"= 0.24 p = 0.043")
+ C_FORB_AB
+
+#######  Abundance ###################
+#### Perennial and Tap Root
+data_VL$relab_perennial = NA; data_VL$relab_taproot = NA; data_VL$relab_legume = NA;
+data_VL$relab_vegrep = NA
+
+for (i in 1:nrow(data_VL)) {
+  Xsite = data_VL[i, which(colnames(data_VL) == "Abies.balsamea"):which(colnames(data_VL) == "Vitis.riparia")]
+  a = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(traits_VL$Perennial == 1)])]) 
+  b = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(traits_VL$Tap.Root.Present == 1)])])
+  c = sum(Xsite[,which(colnames(Xsite) %in% funct_group$Species[which(traits_VL$Legume == 1)])])
+  d = sum(Xsite[,which(colnames(Xsite) %in% funct_group$Species[which(traits_VL$Vegetative.Reproduction == 1)])])
+  data_VL$relab_perennial[i] = a/data_VL$TotAb[i]
+  data_VL$relab_taproot[i] = b/data_VL$TotAb[i]
+  data_VL$relab_legume[i] = c/data_VL$TotAb[i]
+  data_VL$relab_vegrep[i] = d/data_VL$TotAb[i]}
+
+mod_ab_leg = lme(sqrt(Cmass_10cm_Kgm2) ~ relab_legume + Sand, 
+                 random = ~ 1|Lot, method = "REML", data = data_VL)
+res_mod_ab_leg = residuals(mod_ab_leg)
+shapiro.test(res_mod_ab_leg)
+moran.mc(res_mod_ab_leg, lw, 10000,zero.policy=TRUE)
+anova(mod_ab_leg);anova(mod_ab_leg,m_C_soil);AIC(mod_ab_leg)
+RSS<-c(crossprod(res_mod_ab_leg));MSE<-RSS/length(res_mod_ab_leg);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_leg = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(relab_legume) + s(Sand,k=8)+te(Latitude,Longitude), 
+                   random=list(Lot=~1),method = "REML", data = data_VL)
+res_modC_gam_leg = residuals(modC_gam_leg$gam, type="pearson",scaled=T)
+moran.mc(res_modC_gam_leg, lw, 10000,zero.policy=TRUE)
+gam.check(modC_gam_leg$gam);anova.gam(modC_gam_leg$gam)
+lrtest(modC_gam_leg,m_C_soil_gam);AIC(modC_gam_leg)
+RSS<-c(crossprod(res_modC_gam_leg));MSE<-RSS/length(res_modC_gam_leg);RMSE<-sqrt(MSE);RMSE
+
+mod_ab_perennial = lme(sqrt(Cmass_10cm_Kgm2) ~ relab_perennial + Sand, 
+                       random = ~ 1|Lot, method = "REML", data = data_VL)
+res_mod_ab_perennial = residuals(mod_ab_perennial)
+shapiro.test(res_mod_ab_perennial)
+moran.mc(res_mod_ab_perennial, lw, 10000,zero.policy=TRUE)
+anova(mod_ab_perennial);anova(mod_ab_perennial,m_C_soil);AIC(mod_ab_perennial)
+RSS<-c(crossprod(res_mod_ab_perennial));MSE<-RSS/length(res_mod_ab_perennial);RMSE<-sqrt(MSE);RMSE
+
+modV_gam_per = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(relab_perennial) + s(Sand,k=8) + te(Latitude,Longitude), 
+                    random=list(Lot=~1),method = "REML", data = data_VL)
+res_modV_gam_per = residuals(modV_gam_per$gam, type="pearson",scaled=T)
+moran.mc(res_modV_gam_per, lw, 10000,zero.policy=TRUE)
+gam.check(modV_gam_per$gam);anova.gam(modV_gam_per$gam)
+lrtest(modV_gam_per,m_C_soil_gam);AIC(modV_gam_per)
+RSS<-c(crossprod(res_modV_gam_per));MSE<-RSS/length(res_modV_gam_per);RMSE<-sqrt(MSE);RMSE
+
+mod_ab_taproot = lme(sqrt(Cmass_10cm_Kgm2) ~ relab_taproot + Sand, 
+                     random = ~ 1|Lot, method = "REML", data = data_VL)
+res_mod_ab_taproot = residuals(mod_ab_taproot)
+moran.mc(res_mod_ab_taproot,lw,10000,zero.policy = TRUE)
+shapiro.test(res_mod_ab_taproot)
+anova(mod_ab_taproot);anova(mod_ab_taproot,m_C_soil);AIC(mod_ab_taproot)
+RSS<-c(crossprod(res_mod_ab_taproot));MSE<-RSS/length(res_mod_ab_taproot);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_tap = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(relab_taproot) + s(Sand,k=8) + te(Latitude,Longitude), 
+                    random = list(Lot = ~1), method = "REML", data = data_VL)
+res_modC_gam_tap = residuals(modC_gam_tap$gam, type="pearson", scaled=T)
+moran.mc(res_modC_gam_tap,lw,10000,zero.policy=TRUE)
+gam.check(modC_gam_tap$gam);anova.gam(modC_gam_tap$gam)
+lrtest(modC_gam_tap,m_C_soil_gam);AIC(modC_gam_tap)
+RSS<-c(crossprod(res_modC_gam_tap));MSE<-RSS/length(res_modC_gam_tap);RMSE<-sqrt(MSE);RMSE
+
+mod_ab_vegrep = lme(sqrt(Cmass_10cm_Kgm2) ~ relab_vegrep + Sand, 
+                     random = ~ 1|Lot, method = "REML", data = data_VL)
+res_mod_ab_vegrep = residuals(mod_ab_vegrep)
+shapiro.test(res_mod_ab_vegrep)
+moran.mc(res_mod_ab_vegrep,lw,10000,zero.policy = T)
+anova(mod_ab_vegrep,m_C_soil);anova(mod_ab_vegrep);AIC(mod_ab_vegrep)
+RSS<-c(crossprod(res_mod_ab_vegrep));MSE<-RSS/length(res_mod_ab_vegrep);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_vegrep = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(relab_vegrep) + s(Sand,k=8) +te(Latitude,Longitude), 
+                    random = list(Lot = ~1), method = "REML", data = data_VL)
+res_modC_gam_vegrep = residuals(modC_gam_vegrep$gam, type="pearson",scaled=T)
+moran.mc(res_modC_gam_vegrep,lw,10000,zero.policy = T)
+gam.check(modC_gam_vegrep$gam);anova.gam(modC_gam_vegrep$gam)
+lrtest(modC_gam_vegrep,m_C_soil_gam);AIC(modC_gam_vegrep)
+RSS<-c(crossprod(res_modC_gam_vegrep));MSE<-RSS/length(res_modC_gam_vegrep);RMSE<-sqrt(MSE);RMSE
+
+#######################################################################################################################################################################################
+# COMPOSITION EFFECT ON CARBON STORAGE (from baseline model, using the five first PCA axis)
+###########################################################################################
+
+modCmass_PCaxis1 = lme(sqrt(Cmass_10cm_Kgm2) ~ PC1 + Sand, 
+                      random =  ~ 1 | Lot, method = "REML", data = data_VL)          
+res_modCmass_PCaxis1 = residuals(modCmass_PCaxis1, type="pearson", scaled=TRUE)
+moran.mc(res_modCmass_PCaxis1,lw,10000,zero.policy = T)
+shapiro.test(res_modCmass_PCaxis1)
+anova(modCmass_PCaxis1);r.squaredGLMM(modCmass_PCaxis1)
+anova(m_C_soil,modCmass_PCaxis1);AIC(modCmass_PCaxis1)
+RSS<-c(crossprod(res_modCmass_PCaxis1));MSE<-RSS/length(res_modCmass_PCaxis1);RMSE<-sqrt(MSE);RMSE
+
+modCmass_gam_PCaxis1 = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(PC1) + s(Sand,k=8)+te(Latitude,Longitude), 
+                           random =  list(Lot=~ 1), method = "REML", data = data_VL) 
+res_modCmass_gam_PCaxis1 = residuals(modCmass_gam_PCaxis1$gam, type="pearson",scaled=T)
+moran.mc(res_modCmass_gam_PCaxis1,lw,10000,zero.policy = T)
+gam.check(modCmass_gam_PCaxis1$gam);anova(modCmass_gam_PCaxis1$gam)
+lrtest(modCmass_gam_PCaxis1,m_C_soil_gam);AIC(modCmass_gam_PCaxis1)
+RSS<-c(crossprod(res_modCmass_gam_PCaxis1));MSE<-RSS/length(res_modCmass_gam_PCaxis1);RMSE<-sqrt(MSE);RMSE
+
+modCmass_PCaxis2 = lme(sqrt(Cmass_10cm_Kgm2) ~ PC2 + Sand, 
+                      random =  ~ 1 | Lot, method = "REML", data = data_VL)          
+res_modCmass_PCaxis2 = residuals(modCmass_PCaxis2, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_PCaxis2)  ; hist(res_modCmass_PCaxis2)
+moran.mc(res_modCmass_PCaxis2,lw,10000,zero.policy = T)
+anova(modCmass_PCaxis2);r.squaredGLMM(modCmass_PCaxis2)
+anova(m_C_soil,modCmass_PCaxis2);AIC(modCmass_PCaxis2)
+RSS<-c(crossprod(res_modCmass_PCaxis2));MSE<-RSS/length(res_modCmass_PCaxis2);RMSE<-sqrt(MSE);RMSE
+
+modCmass_gam_PCaxis2 = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(PC2) + s(Sand,k=8)+te(Latitude,Longitude), 
+                           random =  list(Lot=~ 1), method = "REML", data = data_VL)   
+res_modCmass_gam_PCaxis2 = residuals(modCmass_gam_PCaxis2$gam, type="pearson",scaled=T)
+moran.mc(res_modCmass_gam_PCaxis2,lw,10000,zero.policy = T)
+gam.check(modCmass_gam_PCaxis2$gam);anova(modCmass_gam_PCaxis2$gam)
+lrtest(modCmass_gam_PCaxis2,m_C_soil_gam);AIC(modCmass_gam_PCaxis2)
+RSS<-c(crossprod(res_modCmass_gam_PCaxis2));MSE<-RSS/length(res_modCmass_gam_PCaxis2);RMSE<-sqrt(MSE);RMSE
+
+modCmass_PCaxis3 = lme(sqrt(Cmass_10cm_Kgm2) ~ PC3 + Sand, 
+                      random =  ~ 1 | Lot, method = "REML", data = data_VL)          
+res_modCmass_PCaxis3 = residuals(modCmass_PCaxis3, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_PCaxis3)  ; hist(res_modCmass_PCaxis3)
+moran.mc(res_modCmass_PCaxis3,lw,10000,zero.policy = T)
+anova(modCmass_PCaxis3);r.squaredGLMM(modCmass_PCaxis3)
+anova(m_C_soil,modCmass_PCaxis3);AIC(modCmass_PCaxis3)
+RSS<-c(crossprod(res_modCmass_PCaxis3));MSE<-RSS/length(res_modCmass_PCaxis3);RMSE<-sqrt(MSE);RMSE
+
+modCmass_gam_PCaxis3 = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(PC3) + s(Sand,k=8)+te(Latitude,Longitude), 
+                           random =  list(Lot=~ 1), method = "REML", data = data_VL)   
+res_modCmass_gam_PCaxis3=residuals(modCmass_gam_PCaxis3$gam,type="pearson",scaled=T)
+moran.mc(res_modCmass_gam_PCaxis3,lw,10000,zero.policy = T)
+gam.check(modCmass_gam_PCaxis3$gam);anova(modCmass_gam_PCaxis3$gam)
+lrtest(modCmass_gam_PCaxis3,m_C_soil_gam);AIC(modCmass_gam_PCaxis3)
+RSS<-c(crossprod(res_modCmass_gam_PCaxis3));MSE<-RSS/length(res_modCmass_gam_PCaxis3);RMSE<-sqrt(MSE);RMSE
+
+modCmass_PCaxis4 = lme(sqrt(Cmass_10cm_Kgm2) ~ PC4 + Sand, 
+                      random =  ~ 1 | Lot, method = "REML", data = data_VL)          
+res_modCmass_PCaxis4 = residuals(modCmass_PCaxis4, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_PCaxis4)  ; hist(res_modCmass_PCaxis4)
+moran.mc(res_modCmass_PCaxis4,lw,10000,zero.policy = T)
+anova(modCmass_PCaxis4);r.squaredGLMM(modCmass_PCaxis4)
+anova(m_C_soil,modCmass_PCaxis4);AIC(modCmass_PCaxis4)
+RSS<-c(crossprod(res_modCmass_PCaxis4));MSE<-RSS/length(res_modCmass_PCaxis4);RMSE<-sqrt(MSE);RMSE
+
+modCmass_gam_PCaxis4 = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(PC4) + s(Sand,k=8)+te(Latitude,Longitude), 
+                           random =  list(Lot=~ 1), method = "REML", data = data_VL)
+res_modCmass_gam_PCaxis4 = residuals(modCmass_gam_PCaxis4$gam, type="pearson",scaled=T)
+moran.mc(res_modCmass_gam_PCaxis4,lw,10000,zero.policy = T)
+gam.check(modCmass_gam_PCaxis4$gam);anova(modCmass_gam_PCaxis4$gam)
+lrtest(modCmass_gam_PCaxis4,m_C_soil_gam);AIC(modCmass_gam_PCaxis4)
+RSS<-c(crossprod(res_modCmass_gam_PCaxis4));MSE<-RSS/length(res_modCmass_gam_PCaxis4);RMSE<-sqrt(MSE);RMSE
+
+
+modCmass_PCaxis5 = lme(sqrt(Cmass_10cm_Kgm2) ~ PC5 + Sand, 
+                      random =  ~ 1 | Lot, method = "REML", data = data_VL)          
+res_modCmass_PCaxis5 = residuals(modCmass_PCaxis5, type="pearson", scaled=TRUE)
+shapiro.test(res_modCmass_PCaxis5)  ; hist(res_modCmass_PCaxis5)
+moran.mc(res_modCmass_PCaxis5,lw,10000,zero.policy = T)
+anova(modCmass_PCaxis5,type="marginal");r.squaredGLMM(modCmass_PCaxis5)
+anova(m_C_soil,modCmass_PCaxis5);AIC(modCmass_PCaxis5)
+RSS<-c(crossprod(res_modCmass_PCaxis5));MSE<-RSS/length(res_modCmass_PCaxis5);RMSE<-sqrt(MSE);RMSE
+
+modCmass_gam_PCaxis5= gamm(sqrt(Cmass_10cm_Kgm2) ~ s(PC5) + s(Sand,k=8)+te(Latitude,Longitude), 
+                           random =  list(Lot=~ 1), method = "REML", data = data_VL)
+res_modCmass_gam_PCaxis5 = residuals(modCmass_gam_PCaxis5$gam, type="pearson",scaled=T)
+moran.mc(res_modCmass_gam_PCaxis5,lw,10000,zero.policy = T)
+gam.check(modCmass_gam_PCaxis5$gam);anova(modCmass_gam_PCaxis5$gam)
+lrtest(modCmass_gam_PCaxis5,m_C_soil_gam);AIC(modCmass_gam_PCaxis5)
+RSS<-c(crossprod(res_modCmass_gam_PCaxis5));MSE<-RSS/length(res_modCmass_gam_PCaxis5);RMSE<-sqrt(MSE);RMSE
+
+####################### Carbon Model with FDis sqrt
+mod_C_Fdis = lme(sqrt(Cmass_10cm_Kgm2) ~ FDis + Sand, 
+                 data= data_VL, random= ~1|Lot, method="REML")
+res_mod_C_Fdis = residuals(mod_C_Fdis, type="pearson",scaled=TRUE)
+shapiro.test(res_mod_C_Fdis)
+moran.mc(res_mod_C_Fdis,lw,10000,zero.policy = T)
+anova(m_C_soil,mod_C_Fdis)
+anova(mod_C_Fdis); r.squaredGLMM(mod_C_Fdis);AIC(mod_C_Fdis)
+RSS<-c(crossprod(res_mod_C_Fdis));MSE<-RSS/length(res_mod_C_Fdis);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_fdis = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(FDis) + s(Sand,k=8)+te(Latitude,Longitude), 
+                     data= data_VL, random= list(Lot=~1),method="REML")
+res_modC_gam_fdis = residuals(modC_gam_fdis$gam, type="pearson",scaled=TRUE)
+moran.mc(res_modC_gam_fdis,lw,10000,zero.policy = T)
+gam.check(modC_gam_fdis$gam);anova(modC_gam_fdis$gam)
+lrtest(modC_gam_fdis,m_C_soil_gam);AIC(modC_gam_fdis)
+summary(modC_gam_fdis$gam)
+RSS<-c(crossprod(res_modC_gam_fdis));MSE<-RSS/length(res_modC_gam_fdis);RMSE<-sqrt(MSE);RMSE
+
+newdata = data.frame(FDis=rep(seq(0.05,0.35,0.01),each=101),Sand=seq(0,100,1))
+a<- predict(mod_C_Fdis, newdata=newdata, se.fit=T,level=0)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new =newdata %>% group_by(FDis)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+
+C_FDIS<-ggplot(data= data_VL,aes(FDis,sqrt(Cmass_10cm_Kgm2)))+theme_classic()+
+  geom_point()+
+  labs(y="C mass (Kg/"~m^2~")",x="Functional Dispersion")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_text(size=24),axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  scale_y_continuous(labels=paste(seq(1,3,1)),breaks=seq(1,3,1),limits=c(0.5,3))+
+  ggtitle(label="LMM"~r^2~"= 0.13 p = 0.014")
+
+C_FDIS
+
+################ Fdis Height ###################
+height = traits_VL[,2,drop = FALSE]
+dbfd2h<-dbFD(height,commu,calc.FGR=FALSE)
+data_VL$Fdis_height = dbfd2h$FDis
+
+mod_C_fdis_height = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_height + Sand, 
+                        data = data_VL, random = ~1|Lot, method="REML")
+res_mod_C_fdis_height = residuals(mod_C_fdis_height)
+shapiro.test(res_mod_C_fdis_height)
+moran.mc(res_mod_C_fdis_height,lw,10000,zero.policy = T)
+anova(mod_C_fdis_height);anova(mod_C_fdis_height,m_C_soil);AIC(mod_C_fdis_height)
+RSS<-c(crossprod(res_mod_C_fdis_height));MSE<-RSS/length(res_mod_C_fdis_height);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_fheight = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Fdis_height) + s(Sand,k=8), 
+                        data = data_VL, random = list(Lot = ~1), method="REML")
+res_modC_gam_fheight = residuals(modC_gam_fheight$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_fheight,lw,10000,zero.policy = T)
+gam.check(modC_gam_fheight$gam);anova(modC_gam_fheight$gam)
+lrtest(modC_gam_fheight,m_C_soil_gam);AIC(modC_gam_fheight)
+RSS<-c(crossprod(res_modC_gam_fheight));MSE<-RSS/length(res_modC_gam_fheight);RMSE<-sqrt(MSE);RMSE
+
+######################### SLA #############
+############## All species ###############
+sla = traits2[,2,drop = FALSE]
+sla_n = na.omit(sla)
+list = rownames(sla_n)
+commu_n = commu [,which(colnames(commu) %in% list)]
+rownames(sla_n)==colnames(commu_n)
+dbfd2s<- dbFD(sla_n, commu_n, corr="cailliez", calc.FGR=FALSE)
+data_VL$Fdis_sla = dbfd2s$FDis
+
+mod_C_fdis_sla = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_sla + Sand, 
+                     data = data_VL, random = ~1|Lot, method="REML",
+                     #cor = corSpatial(form = ~ Latitude + Longitude)
+                     )
+res_mod_C_fdis_sla = residuals(mod_C_fdis_sla)
+shapiro.test(res_mod_C_fdis_sla)
+moran.mc(res_mod_C_fdis_sla,lw,10000,zero.policy = T)
+anova(mod_C_fdis_sla);anova(mod_C_fdis_sla,m_C_soil)
+AIC(mod_C_fdis_sla)
+RSS<-c(crossprod(res_mod_C_fdis_sla));MSE<-RSS/length(res_mod_C_fdis_sla);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_slafdis = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Fdis_sla) + s(Sand,k=8)+te(Latitude,Longitude), 
+                        data = data_VL, random = list(Lot = ~1), method="REML")
+res_modC_gam_slafdis = residuals(modC_gam_slafdis$gam, type="pearson", scaled=T)
+moran.mc(res_modC_gam_slafdis,lw,10000,zero.policy = T)
+gam.check(modC_gam_slafdis$gam);anova.gam(modC_gam_slafdis$gam)
+lrtest(modC_gam_slafdis,m_C_soil_gam);AIC(modC_gam_slafdis)
+RSS<-c(crossprod(res_modC_gam_slafdis));MSE<-RSS/length(res_modC_gam_slafdis);RMSE<-sqrt(MSE);RMSE
+
+#################### Perennial
+perennial = traits2[,3,drop=FALSE]
+dbfdp = dbFD(perennial, commu, calc.FGR = FALSE)
+data_VL$Fdis_perennial = dbfdp$FDis
+
+mod_fdis_per = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_perennial + Sand, 
+                   random = ~1|Lot, data= data_VL, method = "REML")
+res_mod_fdis_per = residuals(mod_fdis_per)
+shapiro.test(res_mod_fdis_per)
+moran.mc(res_mod_fdis_per,lw,10000,zero.policy = T)
+anova(mod_fdis_per);anova(mod_fdis_per,m_C_soil);AIC(mod_fdis_per)
+RSS<-c(crossprod(res_mod_fdis_per));MSE<-RSS/length(res_mod_fdis_per);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_perfdis = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Fdis_perennial) + s(Sand,k=8), 
+                        random = list(Lot = ~1), data= data_VL, method = "REML")
+res_modC_gam_perfdis = residuals(modC_gam_perfdis$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_perfdis,lw,10000,zero.policy = T)
+gam.check(modC_gam_perfdis$gam);anova(modC_gam_perfdis$gam)
+lrtest(modC_gam_perfdis,m_C_soil_gam);AIC(modC_gam_perfdis)
+RSS<-c(crossprod(res_modC_gam_perfdis));MSE<-RSS/length(res_modC_gam_perfdis);RMSE<-sqrt(MSE);RMSE
+
+############ Vegetative ###############
+vegetative = traits2[,4,drop=FALSE]
+dbfsv = dbFD(vegetative,commu)
+data_VL$Fdis_veg = dbfsv$FDis
+mod_fdis_veg = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_veg + Sand, 
+                   random = ~ 1|Lot, method = "REML", data = data_VL)
+res_mod_fdis_veg = residuals(mod_fdis_veg)
+shapiro.test(res_mod_fdis_veg)
+moran.mc(res_mod_fdis_veg,lw,10000,zero.policy = T)
+anova(mod_fdis_veg, type = "marginal"); r.squaredGLMM(mod_fdis_veg);AIC(mod_fdis_veg)
+RSS<-c(crossprod(res_mod_fdis_veg));MSE<-RSS/length(res_mod_fdis_veg);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_vegfdis = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Fdis_veg) + s(Sand,k=8)+te(Latitude,Longitude), 
+                        random = list(Lot=~1), method = "REML", data = data_VL)
+res_modC_gam_vegfdis = residuals(modC_gam_vegfdis$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_vegfdis,lw,10000,zero.policy = T)
+gam.check(modC_gam_vegfdis$gam);anova.gam(modC_gam_vegfdis$gam)
+lrtest(modC_gam_vegfdis,m_C_soil_gam);AIC(modC_gam_vegfdis)
+r.squaredGLMM(mod_fdis_veg)
+RSS<-c(crossprod(res_modC_gam_vegfdis));MSE<-RSS/length(res_modC_gam_vegfdis);RMSE<-sqrt(MSE);RMSE
+
+newdata = data.frame(Fdis_veg=rep(seq(0,1,0.01),each=101),Sand=seq(0,100,1))
+a<- predict(mod_fdis_veg, newdata=newdata, se.fit=T,level=0)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new =newdata %>% group_by(Fdis_veg)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+
+C_FDIS_VEG<-ggplot(data= data_VL,aes(Fdis_veg,sqrt(Cmass_10cm_Kgm2)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(sqrt("C mass (Kg/"~m^2~")")),x="Rep. Modes Dispersion")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  scale_x_continuous(labels=paste(seq(0,1,0.5)),breaks=seq(0,1,0.5),limits=c(0,1))+
+  scale_y_continuous(labels=paste(seq(1,3,1)),breaks=seq(1,3,1),limits=c(0.5,3))+
+  ggtitle(label="LMM"~r^2~"= 0.10 p = 0.050")
+ 
+
+C_FDIS_VEG
+
+tiff(filename="Figure2_composite_17_lowres.tiff",res=150,width=16, height=10, units="in")
+figure2<- multi_panel_figure(columns=3,rows=2,panel_label_type = "none" )
+figure2%<>%
+  fill_panel(C_TYPE,column = 3, row=2)%<>%
+  fill_panel(C_AB,column=1,row=1)%<>%
+  fill_panel(C_GRASS_AB,column=2, row=1)%<>%
+  fill_panel(C_FORB_AB,column=3,row=1)%<>%
+  fill_panel(C_FDIS,column=1,row=2)%<>%
+  fill_panel(C_FDIS_VEG,column=2,row=2)
+figure2
+dev.off()
+
+####### Legume ######
+legume = traits2[,6,drop=F]
+dbfl = dbFD(legume,commu)
+data_VL$Fdis_leg = dbfl$FDis
+mod_fdis_leg = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_leg + Sand, 
+                   random = ~ 1|Lot, method = "REML", data = data_VL,
+                   cor = corSpatial(form = ~ Latitude + Longitude))
+res_mod_fdis_leg = residuals(mod_fdis_leg)
+shapiro.test(res_mod_fdis_leg)
+moran.mc(res_mod_fdis_leg,lw,10000,zero.policy = T)
+anova(m_C_soil,mod_fdis_leg);anova(mod_fdis_leg,type="marginal");AIC(mod_fdis_leg)
+RSS<-c(crossprod(res_mod_fdis_leg));MSE<-RSS/length(res_mod_fdis_leg);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_legfdis = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(Fdis_leg) + s(Sand,k=8)+te(Latitude,Longitude), 
+                        random = list(Lot=~1), method = "REML", data = data_VL)
+res_modC_gam_legfdis = residuals(modC_gam_legfdis$gam,type="pearson")
+moran.mc(res_modC_gam_legfdis,lw,10000,zero.policy = T)
+gam.check(modC_gam_legfdis$gam);anova.gam(modC_gam_legfdis$gam)
+lrtest(modC_gam_legfdis,m_C_soil_gam);AIC(modC_gam_legfdis)
+RSS<-c(crossprod(res_modC_gam_legfdis));MSE<-RSS/length(res_modC_gam_legfdis);RMSE<-sqrt(MSE);RMSE
+
+###### Tap Root ######
+taproot = traits2[,5,drop=F]
+taproot_na = na.omit(taproot); list = rownames(taproot_na)
+commu_tapna = commu[,which(colnames(commu) %in% list)]
+dbftap = dbFD(taproot_na,commu_tapna)
+data_VL$fdis_tap = dbftap$FDis
+mod_fdis_tap = lme(sqrt(Cmass_10cm_Kgm2) ~ fdis_tap + Sand, 
+                   random = ~ 1|Lot, method= "REML", data = data_VL)
+res_mod_fdis_tap = residuals(mod_fdis_tap)
+shapiro.test(res_mod_fdis_tap)
+moran.mc(res_mod_fdis_tap,lw,10000,zero.policy = T)
+anova(m_C_soil,mod_fdis_tap);anova(mod_fdis_tap,type="marginal");AIC(mod_fdis_tap)
+RSS<-c(crossprod(res_mod_fdis_tap));MSE<-RSS/length(res_mod_fdis_tap);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_tapfdis = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(fdis_tap) + s(Sand,k=8)+te(Latitude,Longitude), 
+                        random = list(Lot=~1), method= "REML", data = data_VL)
+res_modC_gam_tapfdis = residuals(modC_gam_tapfdis$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_tapfdis,lw,10000,zero.policy = T)
+gam.check(modC_gam_tapfdis$gam);anova.gam(modC_gam_tapfdis$gam)
+lrtest(modC_gam_tapfdis,m_C_soil_gam);AIC(modC_gam_tapfdis)
+RSS<-c(crossprod(res_modC_gam_tapfdis));MSE<-RSS/length(res_modC_gam_tapfdis);RMSE<-sqrt(MSE);RMSE
+
+################## CWM #############################
+data_VL$CWM_height = dbfd2$CWM[,1]
+mod_C_CWM_height = lme(sqrt(Cmass_10cm_Kgm2) ~ CWM_height + Sand, 
+                       random = ~ 1|Lot, data = data_VL, method = "REML")
+res_mod_C_CWM_height = residuals(mod_C_CWM_height)
+shapiro.test(res_mod_C_CWM_height)
+moran.mc(res_mod_C_CWM_height,lw,10000,zero.policy = T)
+anova(mod_C_CWM_height);anova(mod_C_CWM_height,m_C_soil);AIC(mod_C_CWM_height)
+RSS<-c(crossprod(res_mod_C_CWM_height));MSE<-RSS/length(res_mod_C_CWM_height);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_h_cwm = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(CWM_height) + s(Sand,k=8)+te(Latitude,Longitude), 
+                      random = list(Lot=~1), data = data_VL, method = "REML")
+res_modC_gam_h_cwm = residuals(modC_gam_h_cwm$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_h_cwm,lw,10000,zero.policy = T)
+gam.check(modC_gam_h_cwm$gam);anova.gam(modC_gam_h_cwm$gam)
+lrtest(modC_gam_h_cwm,m_C_soil_gam);AIC(modC_gam_h_cwm)
+RSS<-c(crossprod(res_modC_gam_h_cwm));MSE<-RSS/length(res_modC_gam_h_cwm);RMSE<-sqrt(MSE);RMSE
+
+data_VL$CWM_sla = dbfd2$CWM[,2]
+mod_C_CWM_sla = lme(sqrt(Cmass_10cm_Kgm2) ~ CWM_sla + Sand, 
+                    random = ~ 1|Lot, data = data_VL, method = "REML", 
+                    #cor = corSpatial(form = ~ Latitude + Longitude)
+                    )
+res_mod_C_CWM_sla = residuals(mod_C_CWM_sla)
+shapiro.test(res_mod_C_CWM_sla)
+moran.mc(res_mod_C_CWM_sla,lw,10000,zero.policy = T)
+anova(mod_C_CWM_sla);anova(mod_C_CWM_sla,m_C_soil);AIC(mod_C_CWM_sla)
+RSS<-c(crossprod(res_mod_C_CWM_sla));MSE<-RSS/length(res_mod_C_CWM_sla);RMSE<-sqrt(MSE);RMSE
+
+modC_gam_slacwm = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(CWM_sla) + s(Sand,k=8)+te(Latitude,Longitude), 
+                       random = list(Lot=~1), data = data_VL, method = "REML")
+res_modC_gam_slacwm = residuals(modC_gam_slacwm$gam,type="pearson",scaled=T)
+moran.mc(res_modC_gam_slacwm,lw,10000,zero.policy = T)
+gam.check(modC_gam_slacwm$gam);anova.gam(modC_gam_slacwm$gam)
+lrtest(modC_gam_slacwm,m_C_soil_gam);AIC(modC_gam_slacwm)
+RSS<-c(crossprod(res_modC_gam_slacwm));MSE<-RSS/length(res_modC_gam_slacwm);RMSE<-sqrt(MSE);RMSE
+
+######################## Infiltration TIME, ignoring lack of homogeneity among soil types
+###################################################################################
+#Excluding missing data
+data_t = data_VL[which(is.na(data_VL$K_mm_h) == F),]
+
+## Preparing data for I de Moran test
+data_VL_coords <- data_t;coordinates(data_VL_coords) <- ~ Longitude + Latitude
+IDs <- row.names(as(data_t, "data.frame"))
+# # #Queen neighbors , 10 was an arbitraty value decided after looking at neighbors matrix for diff values
+Sy8_nb <- knn2nb(knearneigh(coordinates(data_VL_coords), k=3,longlat=TRUE))
+dsts <- unlist(nbdists(Sy8_nb, coordinates(data_VL_coords)))
+summary(dsts)
+knea<-dnearneigh(coordinates(data_VL_coords),0,6.5,longlat=TRUE)
+neib <- knea; nb<-neib
+# # #plot matrix
+plot(data_VL_coords);plot(nb, coordinates(data_VL_coords), col='red', lwd=2, add=TRUE)
+# # neighbors
+lw <- nb2listw(neib,zero.policy=TRUE)
+
+#Covariates model
+mod_K_cov= lme(log(K_mm_h)  ~ Date.Vacant + Date.Deforested + Compacteness, 
+                 data = data_t, na.action = na.omit, random = ~ 1|Lot, 
+                 method = "REML")
+res_mod_K_cov = residuals(mod_K_cov)
+shapiro.test(res_mod_K_cov)
+
+anova(mod_K_cov, type= "marginal");r.squaredGLMM(mod_K_cov)
+RSS<-c(crossprod(res_mod_K_cov));MSE<-RSS/length(res_mod_K_cov);RMSE<-sqrt(MSE);RMSE
+
+mod_k_gam_cov = gamm(log(K_mm_h) ~ s(Date.Vacant,k=5) + s(Date.Deforested,k=5) + s(Compacteness) + te(Latitude,Longitude),
+                     data = data_t,method="REML",
+                      random = list(Lot=~1))                     
+res_mod_k_gam_cov = residuals(mod_k_gam_cov$gam)
+gam.check(mod_k_gam_cov$gam);anova(mod_k_gam_cov$gam)
+AIC(mod_k_gam_cov);AIC(mod_K_cov)
+summary(mod_k_gam_cov$gam)
+RSS<-c(crossprod(res_mod_k_gam_cov));MSE<-RSS/length(res_mod_k_gam_cov);RMSE<-sqrt(MSE);RMSE
+
+# #spatial structure
+data_t$residuals = residuals(mod_K_cov, type="pearson", scaled=TRUE)
+ggplot(data_t, aes(Longitude, Latitude, colour = residuals)) +
+  scale_colour_gradientn(colours = terrain.colors(10)) +
+  geom_point(size = 3)
+moran.mc(res_mod_K_cov, lw, 10000,zero.policy=TRUE)
+moran.mc(res_mod_k_gam_cov, lw, 10000,zero.policy=TRUE)
+
+
+# Baseline Model
+mod_K_soil = lme(log(K_mm_h)  ~ Date.Vacant, 
+                      data = data_t, na.action = na.omit, random = ~ 1|Lot)
+res_mod_K_soil = residuals(mod_K_soil)
+moran.mc(res_mod_K_soil, lw, 10000,zero.policy=TRUE)
+shapiro.test(res_mod_K_soil)
+moran.mc(res_mod_K_soil,lw,10000,zero.policy = T)
+anova(mod_K_soil); r.squaredGLMM(mod_K_soil);AIC(mod_K_soil)
+RSS<-c(crossprod(res_mod_K_soil));MSE<-RSS/length(res_mod_K_soil);RMSE<-sqrt(MSE);RMSE
+
+mod_k_gam_base = gamm(log(K_mm_h) ~ s(Date.Vacant,k=5)+te(Latitude,Longitude), data = data_t,method="REML",
+                        random = list(Lot=~1))
+res_mod_k_gam_base = residuals(mod_k_gam_base$gam)
+moran.mc(res_mod_k_gam_base, lw, 10000,zero.policy=TRUE)
+gam.check(mod_k_gam_base$gam);anova(mod_k_gam_base$gam)
+AIC(mod_k_gam_base);summary(mod_k_gam_base$gam)
+RSS<-c(crossprod(res_mod_k_gam_base));MSE<-RSS/length(res_mod_k_gam_base);RMSE<-sqrt(MSE);RMSE
+
+mod_k_gam_base = gamm(log(K_mm_h) ~ s(Date.Vacant,k=5), data = data_t,method="REML",
+                      random = list(Lot=~1))
+summary(mod_k_gam_base$gam)
+newdata = data.frame(Date.Vacant=seq(1948,2019,1),fit=NA)
+a = predict(mod_k_gam_base,newdata=newdata,level=0,se.fit = T)
+newdata$fit = a$fit
+newdata$lower = a$fit - a$se.fit*1.96
+newdata$upper = a$fit + a$se.fit*1.96
+
+K_DV<-ggplot(data = data_t, aes(Date.Vacant,log(K_mm_h)))+theme_classic()+geom_point()+
+  labs(x="Date of Vacancy", y=expression(log("K mm/h"))) +
+    theme(title=element_text(size=18),axis.text.y=element_text(size=18),axis.text.x=element_text(size=18),axis.title.y=element_text(size=24),
+        axis.title.x = element_text(size=24),text=element_text(family="A"))+geom_line(data=newdata,aes(y=fit),size=1)+
+  geom_ribbon(data=newdata,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="GAMM"~r^2~"= 0.08 p = 0.015")+
+  scale_x_continuous(labels=paste(seq(1960,2021,20)),breaks=seq(1960,2021,20),limits=c(1948,2021))
+K_DV
+
+
+tiff(filename="FigureSM_composite_1_lowres.tiff",res=150,width=10, height=4, units="in")
+figure4 <- multi_panel_figure(columns=2,rows=1,panel_label_type = "none" )
+figure4%<>%
+  fill_panel(SAND,column=1,row=1)%<>%
+ fill_panel(K_DV,column=2,row=1)
+figure4
+dev.off()
+
+
+### Hypothesis models
+# Lot Type
+mod_inf_lot = lme(log(K_mm_h) ~ Type_Lot + Date.Vacant, data = data_t,
+                  random = ~ 1|Lot)
+res_mod_inf_lot = residuals(mod_inf_lot)
+moran.mc(res_mod_inf_lot, lw, 10000,zero.policy=TRUE)
+shapiro.test(res_mod_inf_lot)
+anova(mod_K_soil,mod_inf_lot);anova(mod_inf_lot);r.squaredGLMM(mod_inf_lot)
+
+compmodK_lot_type = emmeans(mod_inf_lot, ~ Type_Lot) ; cld(compmodK_lot_type)
+K_TYPE<-ggplot(data = data_VL, aes(Type_Lot,log(K_mm_h),fill=Type_Lot))+ ylim(0,7.5)+
+  geom_boxplot(notch = F, size=0.70)+
+  theme_classic()+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.x=element_blank(),axis.title.y=element_blank(),
+        legend.position = "none",
+        text=element_text(family="A"),title=element_text(size=18))+
+  labs(x="",y=expression(log("K mm/h")))+
+  geom_text(x= 1, y= 6.4, label= "ab",size=6)+
+  geom_text(x= 2, y= 6.4, label= "b",size=6)+
+  geom_text(x= 3, y= 6.4, label= "ab",size=6)+
+  geom_text(x= 4, y= 6.4, label = "a",size=6)+
+  geom_text(x=5, y= 6.4, label="a",size=6)+
+  theme(axis.text.x = element_text(angle = 35, vjust = 1, hjust=1))+
+  scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+
+  scale_fill_manual(values=c("brown1","darkgoldenrod4",
+                             "darkgoldenrod1","chartreuse2",
+                             "chartreuse4"))+ggtitle(label="LMM"~r^2~"= 0.28 p = 0.002")
+K_TYPE
+
+# Species Richness
+mod_inf_sr = lme(log(K_mm_h) ~ spe_rich + Date.Vacant, data = data_t,
+                 random = ~ 1|Lot,method = "REML")
+res_mod_inf_sr = residuals(mod_inf_sr)
+moran.mc(res_mod_inf_sr, lw, 10000,zero.policy=TRUE)
+shapiro.test(res_mod_inf_sr)
+anova(mod_K_soil,mod_inf_sr);anova(mod_inf_sr);AIC(mod_inf_sr)
+RSS<-c(crossprod(res_mod_inf_sr));MSE<-RSS/length(res_mod_inf_sr);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_sr = gamm(log(K_mm_h) ~ s(spe_rich) + s(Date.Vacant,k=5), 
+                     data = data_t,random = list(Lot=~1))
+res_mod_inf_gam_sr = residuals(mod_inf_gam_sr$gam)
+moran.mc(res_mod_inf_gam_sr, lw, 10000,zero.policy=TRUE)
+gam.check(mod_inf_gam_sr$gam);AIC(mod_inf_gam_sr);anova(mod_inf_gam_sr$gam)
+RSS<-c(crossprod(res_mod_inf_gam_sr));MSE<-RSS/length(res_mod_inf_gam_sr);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_sr_tree = lme(log(K_mm_h) ~ Spe_rich_Tree + Date.Vacant, data = data_t,
+                      random = ~ 1|Lot,method = "REML")
+res_mod_inf_sr_tree = residuals(mod_inf_sr_tree)
+moran.mc(res_mod_inf_sr_tree,lw,10000,zero.policy=TRUE)
+shapiro.test(res_mod_inf_sr_tree)
+anova(mod_K_soil,mod_inf_sr_tree);anova(mod_inf_sr_tree);AIC(mod_inf_sr_tree)
+RSS<-c(crossprod(res_mod_inf_sr_tree));MSE<-RSS/length(res_mod_inf_sr_tree);RMSE<-sqrt(MSE);RMSE
+
+mod_k_gam_srtree = gamm(log(K_mm_h) ~ s(Spe_rich_Tree,k=7) + s(Date.Vacant,k=5) + te(Latitude,Longitude), 
+                        data = data_t,method="REML",random = list(Lot=~1))
+res_mod_k_srtree = residuals(mod_k_gam_srtree$gam)
+moran.mc(res_mod_k_srtree,lw,10000,zero.policy=TRUE)
+gam.check(mod_k_gam_srtree$gam);anova(mod_k_gam_srtree$gam);AIC(mod_k_gam_srtree)
+lrtest(mod_k_gam_srtree,mod_k_gam_base);summary(mod_k_gam_srtree$gam)
+RSS<-c(crossprod(res_mod_k_srtree));MSE<-RSS/length(res_mod_k_srtree);RMSE<-sqrt(MSE);RMSE
+
+mod_k_gam_srtree = gamm(log(K_mm_h) ~ s(Spe_rich_Tree,k=7) + s(Date.Vacant,k=5), 
+                        data = data_t,method="REML",random = list(Lot=~1))
+newdata = data.frame(Spe_rich_Tree=rep(seq(0,6.2,0.1),each=81),Date.Vacant=seq(1940,2020,1))
+a<- predict(mod_k_gam_srtree, newdata=newdata, se.fit=T, level=0)
+summary(mod_k_gam_srtree$gam)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new = newdata %>% group_by(Spe_rich_Tree)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+K_SR_T<-ggplot(data= data_t,aes(Spe_rich_Tree,log(K_mm_h)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(log("K mm/h")),x="Tree SR")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_text(size=24),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="GAMM"~r^2~"= 0.01 p = 0.001")
+K_SR_T
+
+mod_inf_sr_shrub = lme(log(K_mm_h) ~ Spe_rich_Shrub + Date.Vacant, 
+                       data = data_t,
+                       random = ~ 1|Lot,method = "REML")
+res_mod_inf_sr_shrub = residuals(mod_inf_sr_shrub)
+moran.mc(res_mod_inf_sr_shrub,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_sr_shrub)
+anova(mod_K_soil,mod_inf_sr_shrub);anova(mod_inf_sr_shrub);AIC(mod_inf_sr_shrub)
+RSS<-c(crossprod(res_mod_inf_sr_shrub));MSE<-RSS/length(res_mod_inf_sr_shrub);RMSE<-sqrt(MSE);RMSE
+
+mod_k_gam_srshrub = gamm(log(K_mm_h) ~ s(Spe_rich_Shrub,k=5) + s(Date.Vacant,k=5), 
+                         data = data_t,
+                        random = list(Lot=~1),method = "REML")
+res_mod_k_gam_srshrub = residuals(mod_k_gam_srshrub$gam)
+gam.check(mod_k_gam_srshrub$gam);anova(mod_k_gam_srshrub$gam);AIC(mod_k_gam_srshrub)
+RSS<-c(crossprod(res_mod_k_gam_srshrub));MSE<-RSS/length(res_mod_k_gam_srshrub);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_sr_grass = lme(log(K_mm_h) ~ Spe_rich_Herbaceous_Grass + Date.Vacant, 
+                       data = data_t,random = ~ 1|Lot,method = "REML")
+res_mod_inf_sr_grass = residuals(mod_inf_sr_grass)
+moran.mc(res_mod_inf_sr_grass,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_sr_grass)
+anova(mod_K_soil,mod_inf_sr_grass);anova(mod_inf_sr_grass);AIC(mod_inf_sr_grass)
+RSS<-c(crossprod(res_mod_inf_sr_grass));MSE<-RSS/length(res_mod_inf_sr_grass);RMSE<-sqrt(MSE);RMSE
+
+mod_k_gam_srgrass = gamm(log(K_mm_h) ~ s(Spe_rich_Herbaceous_Grass,k=7) + s(Date.Vacant,k=5), 
+                         data = data_t,method = "REML")
+res_mod_k_gam_srgrass = residuals(mod_k_gam_srgrass$gam)
+gam.check(mod_k_gam_srgrass$gam);anova(mod_k_gam_srgrass$gam);AIC(mod_k_gam_srgrass)
+RSS<-c(crossprod(res_mod_k_gam_srgrass));MSE<-RSS/length(res_mod_k_gam_srgrass);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_sr_forb = lme(log(K_mm_h) ~ Spe_rich_Forb + Date.Vacant, data = data_t,
+                      random = ~ 1|Lot)
+res_mod_inf_sr_forb = residuals(mod_inf_sr_forb)
+moran.mc(res_mod_inf_sr_forb,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_sr_forb)
+anova(mod_K_soil,mod_inf_sr_forb);anova(mod_inf_sr_forb);r.squaredGLMM(mod_inf_sr_forb);AIC(mod_inf_sr_forb)
+RSS<-c(crossprod(res_mod_inf_sr_forb));MSE<-RSS/length(res_mod_inf_sr_forb);RMSE<-sqrt(MSE);RMSE
+
+mod_K_gam_srforb = gamm(log(K_mm_h) ~ s(Spe_rich_Forb) + s(Date.Vacant,k=5) + te(Latitude,Longitude), 
+                        data = data_t,random = list(Lot=~1),method="REML")
+res_mod_K_gam_srforb = residuals(mod_K_gam_srforb$gam)
+gam.check(mod_K_gam_srforb$gam)
+anova(mod_K_gam_srforb$gam);summary(mod_K_gam_srforb$gam);AIC(mod_K_gam_srforb)
+RSS<-c(crossprod(res_mod_K_gam_srforb));MSE<-RSS/length(res_mod_K_gam_srforb);RMSE<-sqrt(MSE);RMSE
+
+#### Abundance
+mod_inf_ab= lme(log(K_mm_h) ~ TotAb + Date.Vacant, data = data_t,
+                random = ~ 1|Lot)
+res_mod_inf_ab = residuals(mod_inf_ab)
+moran.mc(res_mod_inf_ab,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_ab)
+anova(mod_K_soil,mod_inf_ab);anova(mod_inf_ab); r.squaredGLMM(mod_inf_ab);AIC(mod_inf_ab)
+RSS<-c(crossprod(res_mod_inf_ab));MSE<-RSS/length(res_mod_inf_ab);RMSE<-sqrt(MSE);RMSE
+
+modK_gam_ab = gamm(log(K_mm_h) ~ s(TotAb) + s(Date.Vacant,k=5)+te(Latitude,Longitude), 
+                   data = data_t, 
+                   random = list(Lot = ~1),method="REML")
+res_modK_gam_ab = residuals(modK_gam_ab$gam)
+moran.mc(res_modK_gam_ab,lw,10000,zero.policy = T)
+gam.check(modK_gam_ab$gam);anova(modK_gam_ab$gam);AIC(modK_gam_ab)
+summary(modK_gam_ab$gam)
+RSS<-c(crossprod(res_modK_gam_ab));MSE<-RSS/length(res_modK_gam_ab);RMSE<-sqrt(MSE);RMSE
+
+modK_gam_ab = gamm(log(K_mm_h) ~ s(TotAb) + s(Date.Vacant,k=5), 
+                   data = data_t, 
+                   random = list(Lot = ~1),method="REML")
+newdata = data.frame(TotAb=rep(seq(0,230,1),each=81),Date.Vacant=seq(1940,2020,1))
+summary(modK_gam_ab$gam)
+a<- predict(modK_gam_ab, newdata=newdata, se.fit=T,level=0)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new = newdata %>% group_by(TotAb)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+K_AB<-ggplot(data= data_t,aes(TotAb,log(K_mm_h)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(log("K mm/h")),x="Total Cover")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="GAMM"~r^2~"= 0.30 p < 0.001")
+K_AB
+
+mod_inf_ab_tree= lme(log(K_mm_h) ~ Ab_Tree + Date.Vacant, data = data_t,
+                     random = ~ 1|Lot,method = "REML")
+res_mod_inf_ab_tree = residuals(mod_inf_ab_tree)
+moran.mc(res_mod_inf_ab_tree,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_ab_tree)
+anova(mod_K_soil,mod_inf_ab_tree);anova(mod_inf_ab_tree);AIC(mod_inf_ab_tree)
+RSS<-c(crossprod(res_mod_inf_ab_tree));MSE<-RSS/length(res_mod_inf_ab_tree);RMSE<-sqrt(MSE);RMSE
+
+modK_gam_ab_tree = gamm(log(K_mm_h) ~ s(Ab_Tree) + s(Date.Vacant,k=5) + te(Latitude,Longitude), 
+                        data = data_t,random = list(Lot=~1),method = "REML")
+res_modK_gam_ab_tree = residuals(modK_gam_ab_tree$gam)
+moran.mc(res_modK_gam_ab_tree,lw,10000,zero.policy = T)
+gam.check(modK_gam_ab_tree$gam);anova(modK_gam_ab_tree$gam);AIC(modK_gam_ab_tree)
+RSS<-c(crossprod(res_modK_gam_ab_tree));MSE<-RSS/length(res_modK_gam_ab_tree);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_ab_shrub= lme(log(K_mm_h) ~ Ab_Shrub + Date.Vacant, data = data_t,random = ~ 1|Lot, method = "REML")
+res_mod_inf_ab_shrub = residuals(mod_inf_ab_shrub)
+moran.mc(res_mod_inf_ab_shrub,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_ab_shrub);anova(mod_K_soil,mod_inf_ab_shrub);anova(mod_inf_ab_shrub);AIC(mod_inf_ab_shrub)
+RSS<-c(crossprod(res_mod_inf_ab_shrub));MSE<-RSS/length(res_mod_inf_ab_shrub);RMSE<-sqrt(MSE);RMSE
+
+modK_gam_ab_shrub = gamm(log(K_mm_h) ~ s(Ab_Shrub) + s(Date.Vacant,k=5), 
+                         data = data_t,random = list(Lot=~1),method = "REML")
+res_modK_gam_ab_shrub = residuals(modK_gam_ab_shrub$gam)
+gam.check(modK_gam_ab_shrub$gam);anova(modK_gam_ab_shrub$gam);AIC(modK_gam_ab_shrub)
+RSS<-c(crossprod(res_modK_gam_ab_shrub));MSE<-RSS/length(res_modK_gam_ab_shrub);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_ab_grass = lme(log(K_mm_h) ~ Ab_Herbaceous_Grass + Date.Vacant, 
+                      data = data_t,random = ~ 1|Lot,method="REML")
+res_mod_inf_ab_grass = residuals(mod_inf_ab_grass)
+moran.mc(res_mod_inf_ab_grass,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_ab_grass);anova(mod_K_soil,mod_inf_ab_grass)
+anova(mod_inf_ab_grass);r.squaredGLMM(mod_inf_ab_grass);AIC(mod_inf_ab_grass)
+RSS<-c(crossprod(res_mod_inf_ab_grass));MSE<-RSS/length(res_mod_inf_ab_grass);RMSE<-sqrt(MSE);RMSE
+
+modK_gam_ab_grass = gamm(log(K_mm_h) ~ s(Ab_Herbaceous_Grass) + s(Date.Vacant,k=5)+te(Latitude,Longitude), 
+                         data = data_t,method="REML",random = list(Lot=~1))
+res_modK_gam_ab_grass = residuals(modK_gam_ab_grass$gam)
+moran.mc(res_modK_gam_ab_grass,lw,10000,zero.policy = T)
+gam.check(modK_gam_ab_grass$gam);anova(modK_gam_ab_grass$gam)
+summary(modK_gam_ab_grass$gam);AIC(modK_gam_ab_grass)
+RSS<-c(crossprod(res_modK_gam_ab_grass));MSE<-RSS/length(res_modK_gam_ab_grass);RMSE<-sqrt(MSE);RMSE
+modK_gam_ab_grass = gamm(log(K_mm_h) ~ s(Ab_Herbaceous_Grass) + s(Date.Vacant,k=5), 
+                         data = data_t,method="REML",random = list(Lot=~1))
+summary(modK_gam_ab_grass$gam)
+newdata = data.frame(Ab_Herbaceous_Grass=rep(seq(0,125,1),each=81),Date.Vacant=seq(1940,2020,1))
+a<- predict(modK_gam_ab_grass, newdata=newdata, se.fit=T,level=0)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new = newdata %>% group_by(Ab_Herbaceous_Grass)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+K_AB_G<-ggplot(data= data_t,aes(Ab_Herbaceous_Grass,log(K_mm_h)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(log("K mm/h")),x="Grass Cover")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="GAMM"~r^2~"= 0.18 p = 0.040")
+K_AB_G
+
+mod_inf_ab_forb= lme(log(K_mm_h) ~ Ab_Forb + Date.Vacant, data = data_t,
+                     random = ~ 1|Lot,method = "REML")
+res_mod_inf_ab_forb = residuals(mod_inf_ab_forb)
+moran.mc(res_mod_inf_ab_forb,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_ab_forb)
+anova(mod_K_soil,mod_inf_ab_forb);anova(mod_inf_ab_forb);AIC(mod_inf_ab_forb)
+RSS<-c(crossprod(res_mod_inf_ab_forb));MSE<-RSS/length(res_mod_inf_ab_forb);RMSE<-sqrt(MSE);RMSE
+
+modK_gam_ab_forb = gamm(log(K_mm_h) ~ s(Ab_Forb) + s(Date.Vacant,k=5) + te(Latitude,Longitude), 
+                        data = data_t,random = list(Lot=~1),method = "REML")
+res_modK_gam_ab_forb = residuals(modK_gam_ab_forb$gam)
+moran.mc(res_modK_gam_ab_forb,lw,10000,zero.policy = T)
+gam.check(modK_gam_ab_forb$gam)
+anova(modK_gam_ab_forb$gam);AIC(modK_gam_ab_forb)
+RSS<-c(crossprod(res_modK_gam_ab_forb));MSE<-RSS/length(res_modK_gam_ab_forb);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_relab_per= lme(log(K_mm_h) ~ relab_perennial + Date.Vacant, data = data_t,
+                       random = ~ 1|Lot,method = "REML")
+res_mod_inf_relab_per = residuals(mod_inf_relab_per)
+moran.mc(res_mod_inf_relab_per,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_relab_per)
+anova(mod_K_soil,mod_inf_relab_per);anova(mod_inf_relab_per);AIC(mod_inf_relab_per)
+RSS<-c(crossprod(res_mod_inf_relab_per));MSE<-RSS/length(res_mod_inf_relab_per);RMSE<-sqrt(MSE);RMSE
+
+modK_gam_per = gamm(log(K_mm_h) ~ s(relab_perennial) + s(Date.Vacant,k=5) + te(Latitude,Longitude), 
+                    data = data_t,random = list(Lot=~1),method = "REML")
+res_modK_gam_per = residuals(modK_gam_per$gam)
+moran.mc(res_modK_gam_per,lw,10000,zero.policy = T)
+gam.check(modK_gam_per$gam)
+anova(modK_gam_per$gam);AIC(modK_gam_per)
+RSS<-c(crossprod(res_modK_gam_per));MSE<-RSS/length(res_modK_gam_per);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_relab_tap= lme(log(K_mm_h) ~ relab_taproot + Date.Vacant, data = data_t,
+                       random = ~ 1|Lot, method = "REML")
+res_mod_inf_relab_tap = residuals(mod_inf_relab_tap)
+shapiro.test(res_mod_inf_relab_tap)
+moran.mc(res_mod_inf_relab_tap,lw,10000,zero.policy = T)
+anova(mod_K_soil,mod_inf_relab_tap);anova(mod_inf_relab_tap);r.squaredGLMM(mod_inf_relab_tap)
+AIC(mod_inf_relab_tap)
+RSS<-c(crossprod(res_mod_inf_relab_tap));MSE<-RSS/length(res_mod_inf_relab_tap);RMSE<-sqrt(MSE);RMSE
+
+mod_K_gam_tap_ab = gamm(log(K_mm_h) ~ s(relab_taproot) + s(Date.Vacant,k=5) + te(Latitude,Longitude), 
+                        data = data_t,random = list(Lot=~1),method = "REML")
+res_mod_K_gam_tap_ab = residuals(mod_K_gam_tap_ab$gam)
+gam.check(mod_K_gam_tap_ab$gam)
+anova(mod_K_gam_tap_ab$gam);summary(mod_K_gam_tap_ab$gam);AIC(mod_K_gam_tap_ab)
+RSS<-c(crossprod(res_mod_K_gam_tap_ab));MSE<-RSS/length(res_mod_K_gam_tap_ab);RMSE<-sqrt(MSE);RMSE
+
+newdata = data.frame(relab_taproot=rep(seq(0,1,0.01),each=81),Date.Vacant=seq(1940,2020,1))
+a<- predict(mod_inf_relab_tap, newdata=newdata, se.fit=T,level=0)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new = newdata %>% group_by(relab_taproot)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+
+K_F_TAP<-ggplot(data= data_t,aes(relab_taproot,log(K_mm_h)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(log("K mm/h")),x="Taproot Frequency")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="LMM"~r^2~"= 0.10 p = 0.039")
+K_F_TAP
+
+mod_inf_relab_leg= lme(log(K_mm_h) ~ relab_legume + Date.Vacant, data = data_t,
+                       random = ~ 1|Lot, method = "REML")
+res_mod_inf_relab_leg = residuals(mod_inf_relab_leg)
+moran.mc(res_mod_inf_relab_leg,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_relab_leg)
+anova(mod_K_soil,mod_inf_relab_leg);anova(mod_inf_relab_leg);AIC(mod_inf_relab_leg)
+RSS<-c(crossprod(res_mod_inf_relab_leg));MSE<-RSS/length(res_mod_inf_relab_leg);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_relab_leg = gamm(log(K_mm_h) ~ s(relab_legume) + s(Date.Vacant,k=5), 
+                             data = data_t,random = list(Lot=~1),method = "REML")
+res_mod_inf_gam_relab_leg = residuals(mod_inf_gam_relab_leg$gam)
+moran.mc(res_mod_inf_gam_relab_leg,lw,10000,zero.policy = T)
+gam.check(mod_inf_gam_relab_leg$gam)
+anova(mod_inf_gam_relab_leg$gam);AIC(mod_inf_gam_relab_leg)
+RSS<-c(crossprod(res_mod_inf_gam_relab_leg));MSE<-RSS/length(res_mod_inf_gam_relab_leg);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_relab_vegrep= lme(log(K_mm_h) ~ relab_vegrep + Date.Vacant, 
+                          data = data_t,random = ~ 1|Lot, method = "REML")
+res_mod_inf_relab_vegrep = residuals(mod_inf_relab_vegrep)
+moran.mc(res_mod_inf_relab_vegrep,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_relab_vegrep)
+anova(mod_inf_relab_vegrep);anova(mod_inf_relab_vegrep,mod_K_soil);AIC(mod_inf_relab_vegrep)
+RSS<-c(crossprod(res_mod_inf_relab_vegrep));MSE<-RSS/length(res_mod_inf_relab_vegrep);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_relab_vegrep = gamm(log(K_mm_h) ~ s(relab_vegrep) + s(Date.Vacant,k=5)+te(Latitude,Longitude), 
+                                data = data_t, random = list(Lot=~1), method = "REML")
+res_mod_inf_gam_relab_vegrep = residuals(mod_inf_gam_relab_vegrep$gam)
+moran.mc(res_mod_inf_gam_relab_vegrep,lw,10000,zero.policy = T)
+gam.check(mod_inf_gam_relab_vegrep$gam)
+anova(mod_inf_gam_relab_vegrep$gam);AIC(mod_inf_gam_relab_vegrep)
+RSS<-c(crossprod(res_mod_inf_gam_relab_vegrep));MSE<-RSS/length(res_mod_inf_gam_relab_vegrep);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_fdis = lme(log(K_mm_h) ~ FDis + Date.Vacant, data = data_t,
+                   random = ~ 1|Lot, method = "REML")
+res_mod_inf_fdis= residuals(mod_inf_fdis)
+moran.mc(res_mod_inf_fdis,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_fdis)
+anova(mod_K_soil,mod_inf_fdis);anova(mod_inf_fdis,type="marginal");AIC(mod_inf_fdis)
+RSS<-c(crossprod(res_mod_inf_fdis));MSE<-RSS/length(res_mod_inf_fdis);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_fdis = gamm(log(K_mm_h) ~ s(FDis) + s(Date.Vacant,k=5)+te(Latitude,Longitude), 
+                        data = data_t,random = list(Lot=~1), method = "REML")
+res_mod_inf_gam_fdis = residuals(mod_inf_gam_fdis$gam)
+moran.mc(res_mod_inf_gam_fdis,lw,10000,zero.policy = T)
+gam.check(mod_inf_gam_fdis$gam)
+anova(mod_inf_gam_fdis$gam);AIC(mod_inf_gam_fdis)
+RSS<-c(crossprod(res_mod_inf_gam_fdis));MSE<-RSS/length(res_mod_inf_gam_fdis);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_fdis_h = lme(log(K_mm_h) ~ Fdis_height + Date.Vacant, data = data_t,
+                     random = ~ 1|Lot, method = "REML")
+res_mod_inf_fdis_h= residuals(mod_inf_fdis_h)
+moran.mc(res_mod_inf_fdis_h,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_fdis_h)
+anova(mod_inf_fdis_h);anova(mod_K_soil,mod_inf_fdis_h);AIC(mod_inf_fdis_h)
+RSS<-c(crossprod(res_mod_inf_fdis_h));MSE<-RSS/length(res_mod_inf_fdis_h);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_fdis_h = gamm(log(K_mm_h) ~ s(Fdis_height) + s(Date.Vacant,k=5), 
+                          data = data_t,
+                             random = list(Lot=~1),
+                             method = "REML")
+res_mod_inf_gam_fdis_h = residuals(mod_inf_gam_fdis_h$gam)
+moran.mc(res_mod_inf_gam_fdis_h,lw,10000,zero.policy = T)
+gam.check(mod_inf_gam_fdis_h$gam)
+anova(mod_inf_gam_fdis_h$gam);AIC(mod_inf_gam_fdis_h)
+summary(mod_inf_gam_fdis_h$gam)
+RSS<-c(crossprod(res_mod_inf_gam_fdis_h));MSE<-RSS/length(res_mod_inf_gam_fdis_h);RMSE<-sqrt(MSE);RMSE
+
+newdata = data.frame(Fdis_height=rep(seq(0,1.6,0.01),each=81),Date.Vacant=seq(1940,2020,1))
+a<- predict(mod_inf_gam_fdis_h, newdata=newdata, se.fit=T)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new = newdata %>% group_by(Fdis_height)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+
+K_FDIS_H<-ggplot(data= data_t,aes(Fdis_height,log(K_mm_h)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(log("K mm/h")),x="Height Dispersion")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_text(size=24),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="GAMM"~r^2~"= 0.12 p = 0.002")
+K_FDIS_H
+
+data_t2= data_t[-16,]
+mod_inf_fdis_sla = lme(log(K_mm_h) ~ Fdis_sla + Date.Vacant, data = data_t2,
+                       random = ~ 1|Lot, method = "REML")
+res_mod_inf_fdis_sla= residuals(mod_inf_fdis_sla)
+#moran.mc(res_mod_inf_fdis_sla,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_fdis_sla)
+anova(mod_inf_fdis_sla);r.squaredGLMM(mod_inf_fdis_sla);AIC(mod_inf_fdis_sla)
+RSS<-c(crossprod(res_mod_inf_fdis_sla));MSE<-RSS/length(res_mod_inf_fdis_sla);RMSE<-sqrt(MSE);RMSE
+
+
+mod_inf_gam_fdis_sla = gamm(log(K_mm_h) ~ s(Fdis_sla) + s(Date.Vacant,k=5), 
+                            data = data_t,
+                          random = list(Lot=~1), 
+                          cor = corSpatial(form = ~ Latitude + Longitude),
+                          method = "REML")
+res_mod_inf_gam_fdis_sla = residuals(mod_inf_gam_fdis_sla$gam)
+moran.mc(res_mod_inf_gam_fdis_sla,lw,10000,zero.policy = T)
+RSS<-c(crossprod(res_mod_inf_gam_fdis_sla));MSE<-RSS/length(res_mod_inf_gam_fdis_sla);RMSE<-sqrt(MSE);RMSE
+AIC(mod_inf_gam_fdis_sla);summary(mod_inf_gam_fdis_sla$gam)
+
+mod_K_data_t2 = gamm(log(K_mm_h) ~ s(Date.Vacant,k=5), 
+                            data = data_t2,
+                            random = list(Lot=~1), 
+                            cor = corSpatial(form = ~ Latitude + Longitude),
+                            method = "REML")
+gam.check(mod_inf_gam_fdis_sla$gam)
+anova(mod_inf_gam_fdis_sla$gam)
+AIC(mod_inf_gam_fdis_sla);summary(mod_inf_gam_fdis_sla$gam)
+
+newdata = data.frame(Fdis_sla=rep(seq(0,0.90,0.01),each=81),Date.Vacant=seq(1940,2020,1))
+aa<- predict(mod_inf_fdis_sla, newdata=newdata, se.fit=T,level=0)
+newdata$fit = aa$fit
+newdata$se.fit = aa$se.fit
+new = newdata %>% group_by(Fdis_sla)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+
+K_FDIS_SLA<-ggplot(data= data_t2,aes(Fdis_sla,log(K_mm_h)))+theme_classic()+
+  geom_point()+ labs(y=expression(log("K mm/h")),x="SLA Dispersion")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="LMM"~r^2~"=0.11 p = 0.022#")
+K_FDIS_SLA
+
+mod_inf_fdis_per = lme(log(K_mm_h) ~ Fdis_perennial + Date.Vacant, data = data_t,
+                       random = ~ 1|Lot,method = "REML")
+res_mod_inf_fdis_per= residuals(mod_inf_fdis_per)
+moran.mc(res_mod_inf_fdis_per,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_fdis_per)
+anova(mod_K_soil, mod_inf_fdis_per);AIC(mod_inf_fdis_per)
+anova(mod_inf_fdis_per,type="marginal");r.squaredGLMM(mod_inf_fdis_per)
+RSS<-c(crossprod(res_mod_inf_fdis_per));MSE<-RSS/length(res_mod_inf_fdis_per);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_fdis_per = gamm(log(K_mm_h) ~ s(Fdis_perennial) + s(Date.Vacant,k=5), 
+                            data = data_t,random = list(Lot=~1),method = "REML")
+res_mod_inf_gam_fdis_per = residuals(mod_inf_gam_fdis_per$gam)
+moran.mc(res_mod_inf_gam_fdis_per,lw,10000,zero.policy = T)
+gam.check(mod_inf_gam_fdis_per$gam);anova(mod_inf_gam_fdis_per$gam)
+lrtest(mod_inf_gam_fdis_per,mod_k_gam_base);AIC(mod_inf_gam_fdis_per)
+summary(mod_inf_gam_fdis_per$gam)
+RSS<-c(crossprod(res_mod_inf_gam_fdis_per));MSE<-RSS/length(res_mod_inf_gam_fdis_per);RMSE<-sqrt(MSE);RMSE
+
+newdata = data.frame(Fdis_perennial=rep(seq(0,1.3,0.01),each=81),Date.Vacant=seq(1940,2020,1))
+a<- predict(mod_inf_fdis_per, newdata=newdata, se.fit=T,level=0)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new = newdata %>% group_by(Fdis_perennial)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+
+K_FDIS_LS<-ggplot(data= data_t,aes(Fdis_perennial,log(K_mm_h)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(log("K mm/h")),x="Life Span Dispersion")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="LMM"~r^2~"= 0.14 p = 0.004")
+K_FDIS_LS
+
+mod_inf_fdis_leg = lme(log(K_mm_h) ~ Fdis_leg + Date.Vacant, data = data_t,
+                       random = ~ 1|Lot,
+                       method = "REML")
+res_mod_inf_fdis_leg= residuals(mod_inf_fdis_leg)
+moran.mc(res_mod_inf_fdis_leg,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_fdis_leg)
+anova(mod_K_soil, mod_inf_fdis_leg);anova(mod_inf_fdis_leg);AIC(mod_inf_fdis_leg)
+RSS<-c(crossprod(res_mod_inf_fdis_leg));MSE<-RSS/length(res_mod_inf_fdis_leg);RMSE<-sqrt(MSE);RMSE
+
+mod_K_gam_fdis_leg = gamm(log(K_mm_h) ~ s(Fdis_leg) + s(Date.Vacant,k=5), 
+                          data = data_t,
+                       random = list(Lot=~1), 
+                       method = "REML")
+res_mod_K_gam_fdis_leg = residuals(mod_K_gam_fdis_leg$gam)
+gam.check(mod_K_gam_fdis_leg$gam)
+anova(mod_K_gam_fdis_leg$gam);AIC(mod_K_gam_fdis_leg)
+RSS<-c(crossprod(res_mod_K_gam_fdis_leg));MSE<-RSS/length(res_mod_K_gam_fdis_leg);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_fdis_veg = lme(log(K_mm_h) ~ Fdis_veg + Date.Vacant, data = data_t,
+                       random = ~ 1|Lot, 
+                       method = "REML")
+res_mod_inf_fdis_veg = residuals(mod_inf_fdis_veg)
+moran.mc(res_mod_inf_fdis_veg,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_fdis_veg)
+anova(mod_K_soil, mod_inf_fdis_veg);anova(mod_inf_fdis_veg);r.squaredGLMM(mod_inf_fdis_veg);AIC(mod_inf_fdis_veg)
+summary(mod_inf_fdis_veg)
+RSS<-c(crossprod(res_mod_inf_fdis_veg));MSE<-RSS/length(res_mod_inf_fdis_veg);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_fdis_veg = gamm(log(K_mm_h) ~ s(Fdis_veg) + s(Date.Vacant,k=5) + te(Latitude,Longitude), 
+                            data = data_t,random = list(Lot=~1),method = "REML")
+res_mod_inf_gam_fdis_veg = residuals(mod_inf_gam_fdis_veg$gam)
+moran.mc(res_mod_inf_gam_fdis_veg,lw,10000,zero.policy = T)
+gam.check(mod_inf_gam_fdis_veg$gam)
+anova(mod_inf_gam_fdis_veg$gam);summary(mod_inf_gam_fdis_veg$gam);AIC(mod_inf_gam_fdis_veg)
+RSS<-c(crossprod(res_mod_inf_gam_fdis_veg));MSE<-RSS/length(res_mod_inf_gam_fdis_veg);RMSE<-sqrt(MSE);RMSE
+
+newdata = data.frame(Fdis_veg=rep(seq(0,1.1,0.01),each=81),Date.Vacant=seq(1940,2020,1))
+a<- predict(mod_inf_fdis_veg, newdata=newdata, se.fit=T,level=0)
+newdata$fit = a$fit
+newdata$se.fit = a$se.fit
+new = newdata %>% group_by(Fdis_veg)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+
+K_FDIS_VEG<-ggplot(data= data_t,aes(Fdis_veg,log(K_mm_h)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(log("K mm/h")),x="Rep. Modes Dispersion")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="LMM"~r^2~"= 0.14 p = 0.007")
+K_FDIS_VEG
+
+mod_inf_fdis_tap = lme(log(K_mm_h) ~ fdis_tap + Date.Vacant, data = data_t,
+                                  random = ~ 1|Lot,method = "REML")
+res_mod_inf_fdis_tap = residuals(mod_inf_fdis_tap)
+moran.mc(res_mod_inf_fdis_tap,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_fdis_tap)
+anova(mod_K_soil, mod_inf_fdis_tap);anova(mod_inf_fdis_tap);AIC(mod_inf_fdis_tap)
+RSS<-c(crossprod(res_mod_inf_fdis_tap));MSE<-RSS/length(res_mod_inf_fdis_tap);RMSE<-sqrt(MSE);RMSE
+
+mod_Kgam_fdis_tap = gamm(log(K_mm_h) ~ s(fdis_tap) + s(Date.Vacant,k=5) + te(Latitude,Longitude), 
+                         data = data_t,method = "REML")
+res_mod_Kgam_fdis_tap = residuals(mod_Kgam_fdis_tap$gam)
+moran.mc(res_mod_Kgam_fdis_tap,lw,10000,zero.policy = T)
+gam.check(mod_Kgam_fdis_tap$gam)
+anova(mod_Kgam_fdis_tap$gam)
+lrtest(mod_Kgam_fdis_tap,mod_k_gam_base)
+AIC(mod_Kgam_fdis_tap)
+RSS<-c(crossprod(res_mod_Kgam_fdis_tap));MSE<-RSS/length(res_mod_Kgam_fdis_tap);RMSE<-sqrt(MSE);RMSE
+
+#CWM
+mod_inf_cwm_h = lme(log(K_mm_h) ~ CWM_height + Date.Vacant, data = data_t,
+                    random = ~ 1|Lot, method = "REML")
+res_mod_inf_cwm_h = residuals(mod_inf_cwm_h)
+moran.mc(res_mod_inf_cwm_h,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_cwm_h)
+anova(mod_K_soil,mod_inf_cwm_h);anova(mod_inf_cwm_h);AIC(mod_inf_cwm_h)
+RSS<-c(crossprod(res_mod_inf_cwm_h));MSE<-RSS/length(res_mod_inf_cwm_h);RMSE<-sqrt(MSE);RMSE
+
+mod_Kgam_cwm_h = gamm(log(K_mm_h) ~ s(CWM_height) + s(Date.Vacant,k=5), 
+                      data = data_t, random = list(Lot=~1),method = "REML")
+res_mod_Kgam_cwm_h = residuals(mod_Kgam_cwm_h$gam)
+gam.check(mod_Kgam_cwm_h$gam)
+anova(mod_Kgam_cwm_h$gam);AIC(mod_Kgam_cwm_h)
+RSS<-c(crossprod(res_mod_Kgam_cwm_h));MSE<-RSS/length(res_mod_Kgam_cwm_h);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_cwm_sla = lme(log(K_mm_h) ~ CWM_sla + Date.Vacant, data = data_t,
+                    random = ~ 1|Lot, method = "REML")
+res_mod_inf_cwm_sla = residuals(mod_inf_cwm_sla)
+moran.mc(res_mod_inf_cwm_sla,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_cwm_sla)
+anova(mod_K_soil,mod_inf_cwm_sla)
+anova(mod_inf_cwm_sla);AIC(mod_inf_cwm_sla)
+RSS<-c(crossprod(res_mod_inf_cwm_sla));MSE<-RSS/length(res_mod_inf_cwm_sla);RMSE<-sqrt(MSE);RMSE
+
+mod_Kgam_cwm_sla = gamm(log(K_mm_h) ~ s(CWM_sla) + s(Date.Vacant,k=5) + te(Latitude,Longitude), data = data_t,
+                         random = list(Lot=~1),method = "REML")
+res_mod_Kgam_cwm_sla = residuals(mod_Kgam_cwm_sla$gam)
+moran.mc(res_mod_Kgam_cwm_sla,lw,10000,zero.policy = T)
+gam.check(mod_Kgam_cwm_sla$gam)
+anova(mod_Kgam_cwm_sla$gam);AIC(mod_Kgam_cwm_sla)
+RSS<-c(crossprod(res_mod_Kgam_cwm_sla));MSE<-RSS/length(res_mod_Kgam_cwm_sla);RMSE<-sqrt(MSE);RMSE
+
+#### composition
+
+mod_inf_comp1 = lme(log(K_mm_h) ~ PC1 +  Date.Vacant, data = data_t,
+                   random = ~ 1|Lot, 
+                   method = "REML")
+res_mod_inf_comp1 = residuals(mod_inf_comp1)
+moran.mc(res_mod_inf_comp1,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_comp1)
+anova(mod_K_soil,mod_inf_comp1)
+anova(mod_inf_comp1,type="marginal");r.squaredGLMM(mod_inf_comp1);AIC(mod_inf_comp1)
+RSS<-c(crossprod(res_mod_inf_comp1));MSE<-RSS/length(res_mod_inf_comp1);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_comp_pc1 = gamm(log(K_mm_h) ~ s(PC1, k= 9) + s(Date.Vacant,k=5), 
+                            data = data_t,
+                            random = list(Lot=~1),
+                            method = "REML")
+res_mod_inf_gam_comp_pc1 = residuals(mod_inf_gam_comp_pc1$gam)
+gam.check(mod_inf_gam_comp_pc1$gam)
+anova(mod_inf_gam_comp_pc1$gam)
+summary(mod_inf_gam_comp_pc1$gam)
+AIC(mod_inf_gam_comp_pc1)
+RSS<-c(crossprod(res_mod_inf_gam_comp_pc1));MSE<-RSS/length(res_mod_inf_gam_comp_pc1);RMSE<-sqrt(MSE);RMSE
+
+newdata = data.frame(PC1=rep(seq(-0.8,0.5,0.01),each=81),Date.Vacant=seq(1940,2020,1))
+pred<-predict(mod_inf_comp1, newdata=newdata, se.fit=T, level=0)
+newdata$fit=pred$fit
+newdata$se.fit=pred$se.fit
+new = newdata %>% group_by(PC1)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+new$Type_Lot = "a"
+
+#jpeg(filename = "Figure_X.jpeg", res=300, width=7, height=7, units="in")
+K_PC1<-ggplot(data= data_t,aes(PC1,log(K_mm_h)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(log("K mm/h")),x="PC1")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_text(size=24),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="LMM"~r^2~"=0.15 p = 0.006")
+K_PC1
+#dev.off()
+
+mod_inf_comp2 = lme(log(K_mm_h) ~ PC2 +  Date.Vacant, data = data_t,
+                   random = ~ 1|Lot, 
+                   #cor = corSpatial(form = ~ Latitude + Longitude),
+                   method = "REML")
+res_mod_inf_comp2 = residuals(mod_inf_comp2)
+moran.mc(res_mod_inf_comp2,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_comp2)
+anova(mod_K_soil,mod_inf_comp2)
+anova(mod_inf_comp2);r.squaredGLMM(mod_inf_comp2);AIC(mod_inf_comp2)
+RSS<-c(crossprod(res_mod_inf_comp2));MSE<-RSS/length(res_mod_inf_comp2);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_comp_pc2 = gamm(log(K_mm_h) ~ s(PC2) + s(Date.Vacant,k=5) + te(Latitude,Longitude), data = data_t,
+                            random = list(Lot=~1),
+                            method = "REML")
+res_mod_inf_gam_comp_pc2 = residuals(mod_inf_gam_comp_pc2$gam)
+moran.mc(res_mod_inf_gam_comp_pc2,lw,10000,zero.policy = T)
+gam.check(mod_inf_gam_comp_pc2$gam)
+anova(mod_inf_gam_comp_pc2$gam)
+lrtest(mod_inf_gam_comp_pc2,mod_k_gam_base)
+summary(mod_inf_gam_comp_pc2$gam)
+AIC(mod_inf_gam_comp_pc2)
+RSS<-c(crossprod(res_mod_inf_gam_comp_pc2));MSE<-RSS/length(res_mod_inf_gam_comp_pc2);RMSE<-sqrt(MSE);RMSE
+
+
+mod_inf_comp3 = lme(log(K_mm_h) ~ PC3 +  Date.Vacant, data = data_t,
+                   random = ~ 1|Lot, 
+                   #cor = corSpatial(form = ~ Latitude + Longitude),
+                   method = "REML")
+res_mod_inf_comp3 = residuals(mod_inf_comp3)
+moran.mc(res_mod_inf_comp3,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_comp3)
+anova(mod_K_soil,mod_inf_comp3)
+anova(mod_inf_comp3);r.squaredGLMM(mod_inf_comp3);AIC(mod_inf_comp3)
+RSS<-c(crossprod(res_mod_inf_comp3));MSE<-RSS/length(res_mod_inf_comp3);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_comp_pc3 = gamm(log(K_mm_h) ~ s(PC3) + s(Date.Vacant,k=5) + te(Latitude,Longitude), data = data_t,
+                            random = list(Lot=~1),
+                            method = "REML")
+res_mod_inf_gam_comp_pc3 = residuals(mod_inf_gam_comp_pc3$gam)
+moran.mc(res_mod_inf_gam_comp_pc3,lw,10000,zero.policy = T)
+gam.check(mod_inf_gam_comp_pc3$gam)
+anova(mod_inf_gam_comp_pc3$gam)
+lrtest(mod_inf_gam_comp_pc3,mod_k_gam_base)
+summary(mod_inf_gam_comp_pc3$gam)
+AIC(mod_inf_gam_comp_pc3)
+RSS<-c(crossprod(res_mod_inf_gam_comp_pc3));MSE<-RSS/length(res_mod_inf_gam_comp_pc3);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_comp4 = lme(log(K_mm_h) ~ PC4 +  Date.Vacant, data = data_t,
+                   random = ~ 1|Lot, 
+                   #cor = corSpatial(form = ~ Latitude + Longitude),
+                   method = "REML")
+res_mod_inf_comp4 = residuals(mod_inf_comp4)
+moran.mc(res_mod_inf_comp4,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_comp4)
+anova(mod_K_soil,mod_inf_comp4)
+anova(mod_inf_comp4);r.squaredGLMM(mod_inf_comp4);AIC(mod_inf_comp4)
+RSS<-c(crossprod(res_mod_inf_comp4));MSE<-RSS/length(res_mod_inf_comp4);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_comp_pc4 = gamm(log(K_mm_h) ~ s(PC4) + s(Date.Vacant,k=5) + te(Latitude,Longitude), data = data_t,
+                            random = list(Lot=~1),
+                            method = "REML")
+res_mod_inf_gam_comp_pc4 = residuals(mod_inf_gam_comp_pc4$gam)
+moran.mc(res_mod_inf_gam_comp_pc4,lw,10000,zero.policy = T)
+gam.check(mod_inf_gam_comp_pc4$gam)
+anova(mod_inf_gam_comp_pc4$gam)
+lrtest(mod_inf_gam_comp_pc4,mod_k_gam_base)
+summary(mod_inf_gam_comp_pc4$gam)
+AIC(mod_inf_gam_comp_pc4)
+RSS<-c(crossprod(res_mod_inf_gam_comp_pc4));MSE<-RSS/length(res_mod_inf_gam_comp_pc4);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_comp5 = lme(log(K_mm_h) ~ PC5 +  Date.Vacant, data = data_t,
+                   random = ~ 1|Lot, 
+                   #cor = corSpatial(form = ~ Latitude + Longitude),
+                   method = "REML")
+res_mod_inf_comp5 = residuals(mod_inf_comp5)
+moran.mc(res_mod_inf_comp5,lw,10000,zero.policy = T)
+shapiro.test(res_mod_inf_comp5)
+anova(mod_K_soil,mod_inf_comp5)
+anova(mod_inf_comp5);r.squaredGLMM(mod_inf_comp5);AIC(mod_inf_comp5)
+RSS<-c(crossprod(res_mod_inf_comp5));MSE<-RSS/length(res_mod_inf_comp5);RMSE<-sqrt(MSE);RMSE
+
+mod_inf_gam_comp_pc5 = gamm(log(K_mm_h) ~ s(PC5) + s(Date.Vacant,k=5), 
+                            data = data_t,
+                            random = list(Lot=~1), 
+                            method = "REML")
+res_mod_inf_gam_comp_pc5 = residuals(mod_inf_gam_comp_pc5$gam)
+gam.check(mod_inf_gam_comp_pc5$gam)
+anova(mod_inf_gam_comp_pc5$gam)
+lrtest(mod_inf_gam_comp_pc5,mod_k_gam_base)
+summary(mod_inf_gam_comp_pc5$gam)
+AIC(mod_inf_gam_comp_pc5)
+RSS<-c(crossprod(res_mod_inf_gam_comp_pc5));MSE<-RSS/length(res_mod_inf_gam_comp_pc5);RMSE<-sqrt(MSE);RMSE
+
+newdata = data.frame(PC5=rep(seq(-0.8,0.55,0.01),each=81),Date.Vacant=seq(1940,2020,1))
+pred<-predict(mod_inf_comp5, newdata=newdata, se.fit=T, level=0)
+newdata$fit=pred$fit
+newdata$se.fit=pred$se.fit
+new = newdata %>% group_by(PC5)%>%summarize(fit=median(fit),upper=median(fit)+median(se.fit*1.96),lower=median(fit)-median(se.fit*1.96))
+new$Type_Lot = "a"
+
+K_PC5<-ggplot(data= data_t,aes(PC5,log(K_mm_h)))+theme_classic()+
+  geom_point()+
+  labs(y=expression(log("K mm/h")),x="PC5")+
+  theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
+        axis.title.y=element_blank(),
+        axis.title.x = element_text(size=24),
+        text=element_text(family="A"),title=element_text(size=18))+
+  geom_line(data=new,aes(y=fit),size=1)+
+  geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
+  ggtitle(label="LMM"~r^2~"= 0.23 p < 0.001")
+K_PC5
+
+tiff(filename="Figure3_composite8_lowres.tiff",res=150,width=18, height=14, units="in")
+figure3<- multi_panel_figure(columns=4,rows=3,panel_label_type = "none")
+figure3%<>%
+  fill_panel(K_TYPE,column = 3, row=3)%<>%
+  fill_panel(K_SR_T,column=1,row=1)%<>%
+  fill_panel(K_AB,column=2,row=1)%<>%
+  fill_panel(K_AB_G,column=3,row=1)%<>%
+  fill_panel(K_F_TAP,column=4,row=1)%<>%
+  fill_panel(K_FDIS_H,column=1,row=2)%<>%
+  fill_panel(K_FDIS_SLA,column=2,row=2)%<>%
+  fill_panel(K_FDIS_LS,column=3,row=2)%<>%
+  fill_panel(K_FDIS_VEG,column=4,row=2)%<>%
+  fill_panel(K_PC1,column=1,row=3)%<>%
+  fill_panel(K_PC5,column=2,row=3)
+figure3
+dev.off()
+# 
+# jpeg(filename="Figure4_composite.jpg",res=600,width=16, height=8, units="in")
+# figure4<- multi_panel_figure(columns=2,rows=1,panel_label_type = "none")
+# figure4%<>%
+#   fill_panel(SAND,column = 1, row=1)%<>%
+#   fill_panel(K_DV,column=2,row=1)
+# figure4
+# dev.off()
+
+#### Exploring
+### Lot Type Effects 
+par(mgp=c(2,1,0))
+kruskal(data_VL$Compacteness, data_VL$Type_Lot,  console = T, p.adj = "BH")
+boxplot(data_VL$Compacteness ~ data_VL$Type_Lot, ylab = "Soil compacteness", ylim = c(0,370), main = "KS test - p = 0.0099",frame=F) 
+box(bty="l")
+means <- tapply(data_VL$Compacteness,data_VL$Type_Lot,mean)
+std <- tapply(data_VL$Compacteness,data_VL$Type_Lot, se)
+text(x= 1, y= 350, labels= "AB", cex = 2)
+text(x= 2, y= 350, labels= "A", cex = 2)
+text(x= 3, y= 350, labels= "AB", cex = 2)
+text(x= 4, y= 350, labels= "B", cex = 2)
+text(x= 5, y= 350, labels= "AB", cex = 2)
+
+# Past land-use New 
+#Year Vacant
+kruskal(data_VL$Date.Vacant, data_VL$Type_Lot,  console = T, p.adj = "BH")
+boxplot(data_VL$Date.Vacant ~ data_VL$Type_Lot, ylab = "Year Vacant", xlab="Type of Lot", ylim = c(1940,2025), main = "KS test - p < 0.001") 
+means <- tapply(data_VL$Date.Vacant,data_VL$Type_Lot,mean)
+std <- tapply(data_VL$Date.Vacant,data_VL$Type_Lot, se)
+points(means,col="red",pch=19, cex = 1.2)
+lines(c(1,1), c(means[1]-std[1], means[1]+std[1]),col="red") 
+lines(c(2,2), c(means[2]-std[2], means[2]+std[2]),col="red") 
+lines(c(3,3), c(means[3]-std[3], means[3]+std[3]),col="red") 
+lines(c(4,4), c(means[4]-std[4], means[4]+std[4]),col="red") 
+lines(c(5,5), c(means[5]-std[5], means[5]+std[5]),col="red") 
+text(x= 1, y= 2023, labels= "C", cex = 2)
+text(x= 2, y= 2023, labels= "B", cex = 2)
+text(x= 3, y= 2023, labels= "B", cex = 2)
+text(x= 4, y= 2023, labels= "A", cex = 2)
+text(x= 5, y= 2023, labels= "B", cex = 2)
+#Year Deforestation
+kruskal(data_VL$Date.Deforested, data_VL$Type_Lot,  console = T, p.adj = "BH")
+boxplot(data_VL$Date.Deforested ~ data_VL$Type_Lot, ylab = "Year Deforested", xlab="Type of Lot", ylim = c(1940,2025), main = "KS test - p = 0.002") 
+means <- tapply(data_VL$Date.Vacant,data_VL$Type_Lot,mean)
+std <- tapply(data_VL$Date.Vacant,data_VL$Type_Lot, se)
+points(means,col="red",pch=19, cex = 1.2)
+lines(c(1,1), c(means[1]-std[1], means[1]+std[1]),col="red") 
+lines(c(2,2), c(means[2]-std[2], means[2]+std[2]),col="red") 
+lines(c(3,3), c(means[3]-std[3], means[3]+std[3]),col="red") 
+lines(c(4,4), c(means[4]-std[4], means[4]+std[4]),col="red") 
+lines(c(5,5), c(means[5]-std[5], means[5]+std[5]),col="red") 
+text(x= 1, y= 2023, labels= "C", cex = 2)
+text(x= 2, y= 2023, labels= "AB", cex = 2)
+text(x= 3, y= 2023, labels= "AB", cex = 2)
+text(x= 4, y= 2023, labels= "BC", cex = 2)
+text(x= 5, y= 2023, labels= "A", cex = 2)
+
+par(mgp=c(3,1,0))
+kruskal(data_VL$Sand, data_VL$Type_Lot, console = T, p.adj ="BH")
+boxplot(data_VL$Sand ~ data_VL$Type_Lot, ylab = "% of Sand", xlab= "Type of Lot", ylim = c(0,120), main ="KS test - p < 0.001")
+text(x = 1, y = 110, labels ="A")
+text(x = 2, y = 110, labels ="B")
+text(x = 3, y = 110, labels ="A")
+text(x = 4, y = 110, labels ="C")
+text(x = 5, y = 110, labels ="A")
+
+kruskal(data_VL$Silt, data_VL$Type_Lot, console = T, p.adj ="BH")
+boxplot(data_VL$Silt ~ data_VL$Type_Lot, ylab = "% of Silt", xlab= "Type of Lot", ylim = c(0,100), main ="KS test - p < 0.001")
+text(x = 1, y = 90, labels ="C", cex = 2)
+text(x = 2, y = 90, labels ="B", cex = 2)
+text(x = 3, y = 90, labels ="B", cex = 2)
+text(x = 4, y = 90, labels ="A", cex = 2)
+text(x = 5, y = 90, labels ="B", cex = 2)
+
+kruskal(data_VL$Clay, data_VL$Type_Lot, console = T, p.adj ="BH")
+boxplot(data_VL$Clay ~ data_VL$Type_Lot, ylab = "% of Clay", xlab= "Type of Lot", ylim = c(0,60), main ="KS test - p < 0.001")
+text(x = 1, y = 55, labels ="B", cex = 2)
+text(x = 2, y = 55, labels ="C", cex = 2)
+text(x = 3, y = 55, labels ="AB", cex = 2)
+text(x = 4, y = 55, labels ="A", cex = 2)
+text(x = 5, y = 55, labels ="B", cex = 2)
+
+
+#### Building Tables
+
+modcomp = as.data.frame(matrix(NA, nrow = 30, ncol = 11))
+colnames(modcomp) = c("Model", "LME_F", "LME_p_value","GAMM_F","GAMM_P","edf",
+                      "K_LME_F","K_LME_P","K_GAMM_F","K_GAMM_P","K_edf")
+modcomp$Model = c("Baseline - Sand %","Land Cover","Species Richness","Total Cover",
+                  "Tree Species Richness","Tree Cover","Shrub Species Richness",
+                  "Shrub Cover","Grass Species Richness","Grass Cover",
+                  "Forb Species Richness","Forb Cover","CWM Height","CWM SLA",
+                  "Perennial Frequency","Veg. Rep. Frequency","Taproot Frequency",
+                  "Legume Frequency","FDis All Traits","FDis Height","FDis SLA",
+                  "FDis Life Span","FDis Vegetative Rep.","FDis Taproot",
+                  "FDis Legumes","PC1 - Composition","PC2 - Composition",
+                  "PC3 - Composition","PC4 - Composition","PC5 - Composition")
+
+modcomp$LME_F[1] = anova(m_C_soil,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[1]=anova(m_C_soil,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[1] = as.list(anova(m_C_soil_gam$gam))$s.table[1,3]
+modcomp$GAMM_P[1]=as.list(anova(m_C_soil_gam$gam))$s.table[1,4]
+modcomp$edf[1] = as.list(anova(m_C_soil_gam$gam))$edf
+
+modcomp$LME_F[2] = anova(modCmass_lot_type,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[2]=anova(modCmass_lot_type,type="marginal")$'p-value'[2]
+
+modcomp$LME_F[3] = anova(modCmass_spe_rich,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[3]=anova(modCmass_spe_rich,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[3] = as.list(anova(modC_gam_srich$gam))$s.table[1,3]
+modcomp$GAMM_P[3]=as.list(anova(modC_gam_srich$gam))$s.table[1,4]
+modcomp$edf[3] = as.list(anova(modC_gam_srich$gam))$edf[1]
+
+modcomp$LME_F[5] = anova(modCmass_Tree_rich,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[5]=anova(modCmass_Tree_rich,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[5] = as.list(anova(modC_gam_srich_tree$gam))$s.table[1,3]
+modcomp$GAMM_P[5]=as.list(anova(modC_gam_srich_tree$gam))$s.table[1,4]
+modcomp$edf[5] = as.list(anova(modC_gam_srich_tree$gam))$edf[1]
+
+modcomp$LME_F[7] = anova(modCmass_Shrub_rich,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[7]=anova(modCmass_Shrub_rich,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[7] = as.list(anova(modC_gam_srich_shr$gam))$s.table[1,3]
+modcomp$GAMM_P[7]=as.list(anova(modC_gam_srich_shr$gam))$s.table[1,4]
+modcomp$edf[7] = as.list(anova(modC_gam_srich_shr$gam))$edf[1]
+
+modcomp$LME_F[9] = anova(modCmass_Herbaceous_Grass_rich,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[9]=anova(modCmass_Herbaceous_Grass_rich,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[9] = as.list(anova(modC_gam_srich_grass$gam))$s.table[1,3]
+modcomp$GAMM_P[9]=as.list(anova(modC_gam_srich_grass$gam))$s.table[1,4]
+modcomp$edf[9] = as.list(anova(modC_gam_srich_grass$gam))$edf[1]
+
+modcomp$LME_F[11] = anova(modCmass_Forb_rich,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[11]=anova(modCmass_Forb_rich,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[11] = as.list(anova(modC_gam_srich_forb$gam))$s.table[1,3]
+modcomp$GAMM_P[11]=as.list(anova(modC_gam_srich_forb$gam))$s.table[1,4]
+modcomp$edf[11] = as.list(anova(modC_gam_srich_forb$gam))$edf[1]
+
+modcomp$LME_F[4] = anova(modCmass_TotAb_lin,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[4]=anova(modCmass_TotAb_lin,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[4] = as.list(anova(modCmass_TotAb_gam$gam))$s.table[1,3]
+modcomp$GAMM_P[4]=as.list(anova(modCmass_TotAb_gam$gam))$s.table[1,4]
+modcomp$edf[4] = as.list(anova(modCmass_TotAb_gam$gam))$edf[1]
+
+modcomp$LME_F[6] = anova(modCmass_Ab_Tree_lin,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[6]=anova(modCmass_Ab_Tree_lin,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[6] = as.list(anova(modC_gam_tree_ab$gam))$s.table[1,3]
+modcomp$GAMM_P[6]=as.list(anova(modC_gam_tree_ab$gam))$s.table[1,4]
+modcomp$edf[6] = as.list(anova(modC_gam_tree_ab$gam))$edf[1]
+
+modcomp$LME_F[8] = anova(modCmass_Ab_Shrub_lin,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[8]=anova(modCmass_Ab_Shrub_lin,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[8] = as.list(anova(modC_gam_shrub_ab$gam))$s.table[1,3]
+modcomp$GAMM_P[8]=as.list(anova(modC_gam_shrub_ab$gam))$s.table[1,4]
+modcomp$edf[8] = as.list(anova(modC_gam_shrub_ab$gam))$edf[1]
+
+modcomp$LME_F[10] = anova(modCmass_Ab_Herbaceous_Grass_lin,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[10]=anova(modCmass_Ab_Herbaceous_Grass_lin,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[10] = as.list(anova(modC_fam_ab_grass_ab$gam))$s.table[1,3]
+modcomp$GAMM_P[10]=as.list(anova(modC_fam_ab_grass_ab$gam))$s.table[1,4]
+modcomp$edf[10] = as.list(anova(modC_fam_ab_grass_ab$gam))$edf[1]
+
+modcomp$LME_F[12] = anova(modCmass_Ab_Forb_lin,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[12]=anova(modCmass_Ab_Forb_lin,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[12] = as.list(anova(modC_gam_forb_ab$gam))$s.table[1,3]
+modcomp$GAMM_P[12]=as.list(anova(modC_gam_forb_ab$gam))$s.table[1,4]
+modcomp$edf[12] = as.list(anova(modC_gam_forb_ab$gam))$edf[1]
+
+modcomp$LME_F[18] = anova(mod_ab_leg,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[18]=anova(mod_ab_leg,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[18] = as.list(anova(modC_gam_leg$gam))$s.table[1,3]
+modcomp$GAMM_P[18]=as.list(anova(modC_gam_leg$gam))$s.table[1,4]
+modcomp$edf[18] = as.list(anova(modC_gam_leg$gam))$edf[1]
+
+modcomp$LME_F[15] = anova(mod_ab_perennial,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[15]=anova(mod_ab_perennial,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[15] = as.list(anova(modV_gam_per$gam))$s.table[1,3]
+modcomp$GAMM_P[15]=as.list(anova(modV_gam_per$gam))$s.table[1,4]
+modcomp$edf[15] = as.list(anova(modV_gam_per$gam))$edf[1]
+
+modcomp$LME_F[17] = anova(mod_ab_taproot,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[17]=anova(mod_ab_taproot,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[17] = as.list(anova(modC_gam_tap$gam))$s.table[1,3]
+modcomp$GAMM_P[17]=as.list(anova(modC_gam_tap$gam))$s.table[1,4]
+modcomp$edf[17] = as.list(anova(modC_gam_tap$gam))$edf[1]
+
+modcomp$LME_F[16] = anova(mod_ab_vegrep,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[16]=anova(mod_ab_vegrep,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[16] = as.list(anova(modC_gam_vegrep$gam))$s.table[1,3]
+modcomp$GAMM_P[16]=as.list(anova(modC_gam_vegrep$gam))$s.table[1,4]
+modcomp$edf[16] = as.list(anova(modC_gam_vegrep$gam))$edf[1]
+
+modcomp$LME_F[26] = anova(modCmass_PCaxis1,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[26]=anova(modCmass_PCaxis1,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[26] = as.list(anova(modCmass_gam_PCaxis1$gam))$s.table[1,3]
+modcomp$GAMM_P[26]=as.list(anova(modCmass_gam_PCaxis1$gam))$s.table[1,4]
+modcomp$edf[26] = as.list(anova(modCmass_gam_PCaxis1$gam))$edf[1]
+
+modcomp$LME_F[27] = anova(modCmass_PCaxis2,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[27]=anova(modCmass_PCaxis2,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[27] = as.list(anova(modCmass_gam_PCaxis2$gam))$s.table[1,3]
+modcomp$GAMM_P[27]=as.list(anova(modCmass_gam_PCaxis2$gam))$s.table[1,4]
+modcomp$edf[27] = as.list(anova(modCmass_gam_PCaxis2$gam))$edf[1]
+
+modcomp$LME_F[28] = anova(modCmass_PCaxis3,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[28]=anova(modCmass_PCaxis3,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[28] = as.list(anova(modCmass_gam_PCaxis3$gam))$s.table[1,3]
+modcomp$GAMM_P[28]=as.list(anova(modCmass_gam_PCaxis3$gam))$s.table[1,4]
+modcomp$edf[28] = as.list(anova(modCmass_gam_PCaxis3$gam))$edf[1]
+
+modcomp$LME_F[29] = anova(modCmass_PCaxis4,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[29]=anova(modCmass_PCaxis4,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[29] = as.list(anova(modCmass_gam_PCaxis4$gam))$s.table[1,3]
+modcomp$GAMM_P[29]=as.list(anova(modCmass_gam_PCaxis4$gam))$s.table[1,4]
+modcomp$edf[29] = as.list(anova(modCmass_gam_PCaxis4$gam))$edf[1]
+
+modcomp$LME_F[30] = anova(modCmass_PCaxis5,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[30]=anova(modCmass_PCaxis5,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[30] = as.list(anova(modCmass_gam_PCaxis5$gam))$s.table[1,3]
+modcomp$GAMM_P[30]=as.list(anova(modCmass_gam_PCaxis5$gam))$s.table[1,4]
+modcomp$edf[30] = as.list(anova(modCmass_gam_PCaxis5$gam))$edf[1]
+
+modcomp$LME_F[19] = anova(mod_C_Fdis,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[19]=anova(mod_C_Fdis,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[19] = as.list(anova(modC_gam_fdis$gam))$s.table[1,3]
+modcomp$GAMM_P[19]=as.list(anova(modC_gam_fdis$gam))$s.table[1,4]
+modcomp$edf[19] = as.list(anova(modC_gam_fdis$gam))$edf[1]
+
+modcomp$LME_F[20] = anova(mod_C_fdis_height,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[20]=anova(mod_C_fdis_height,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[20] = as.list(anova(modC_gam_fheight$gam))$s.table[1,3]
+modcomp$GAMM_P[20]=as.list(anova(modC_gam_fheight$gam))$s.table[1,4]
+modcomp$edf[20] = as.list(anova(modC_gam_fheight$gam))$edf[1]
+
+modcomp$LME_F[21] = anova(mod_C_fdis_sla,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[21]=anova(mod_C_fdis_sla,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[21] = as.list(anova(modC_gam_slafdis$gam))$s.table[1,3]
+modcomp$GAMM_P[21]=as.list(anova(modC_gam_slafdis$gam))$s.table[1,4]
+modcomp$edf[21] = as.list(anova(modC_gam_slafdis$gam))$edf[1]
+
+modcomp$LME_F[22] = anova(mod_fdis_per,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[22]=anova(mod_fdis_per,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[22] = as.list(anova(modC_gam_perfdis$gam))$s.table[1,3]
+modcomp$GAMM_P[22]=as.list(anova(modC_gam_perfdis$gam))$s.table[1,4]
+modcomp$edf[22] = as.list(anova(modC_gam_perfdis$gam))$edf[1]
+
+modcomp$LME_F[23] = anova(mod_fdis_veg,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[23]=anova(mod_fdis_veg,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[23] = as.list(anova(modC_gam_vegfdis$gam))$s.table[1,3]
+modcomp$GAMM_P[23]=as.list(anova(modC_gam_vegfdis$gam))$s.table[1,4]
+modcomp$edf[23] = as.list(anova(modC_gam_vegfdis$gam))$edf[1]
+
+modcomp$LME_F[25] = anova(mod_fdis_leg,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[25]=anova(mod_fdis_leg,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[25] = as.list(anova(modC_gam_legfdis$gam))$s.table[1,3]
+modcomp$GAMM_P[25]=as.list(anova(modC_gam_legfdis$gam))$s.table[1,4]
+modcomp$edf[25] = as.list(anova(modC_gam_legfdis$gam))$edf[1]
+
+modcomp$LME_F[24] = anova(mod_fdis_tap,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[24]=anova(mod_fdis_tap,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[24] = as.list(anova(modC_gam_tapfdis$gam))$s.table[1,3]
+modcomp$GAMM_P[24]=as.list(anova(modC_gam_tapfdis$gam))$s.table[1,4]
+modcomp$edf[24] = as.list(anova(modC_gam_tapfdis$gam))$edf[1]
+
+modcomp$LME_F[13] = anova(mod_C_CWM_height,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[13]=anova(mod_C_CWM_height,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[13] = as.list(anova(modC_gam_h_cwm$gam))$s.table[1,3]
+modcomp$GAMM_P[13]=as.list(anova(modC_gam_h_cwm$gam))$s.table[1,4]
+modcomp$edf[13] = as.list(anova(modC_gam_h_cwm$gam))$edf[1]
+
+modcomp$LME_F[14] = anova(mod_C_CWM_sla,type="marginal")$'F-value'[2]
+modcomp$LME_p_value[14]=anova(mod_C_CWM_sla,type="marginal")$'p-value'[2]
+modcomp$GAMM_F[14] = as.list(anova(modC_gam_slacwm$gam))$s.table[1,3]
+modcomp$GAMM_P[14]=as.list(anova(modC_gam_slacwm$gam))$s.table[1,4]
+modcomp$edf[14] = as.list(anova(modC_gam_slacwm$gam))$edf[1]
+
+modcomp$K_LME_F[1] = anova(mod_K_soil,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[1]=anova(mod_K_soil,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[1] = as.list(anova(mod_k_gam_base$gam))$s.table[1,3]
+modcomp$K_GAMM_P[1]=as.list(anova(mod_k_gam_base$gam))$s.table[1,4]
+modcomp$K_edf[1] = as.list(anova(mod_k_gam_base$gam))$edf
+
+modcomp$K_LME_F[2] = anova(mod_inf_lot,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[2]=anova(mod_inf_lot,type="marginal")$'p-value'[2]
+
+modcomp$K_LME_F[3] = anova(mod_inf_sr,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[3]=anova(mod_inf_sr,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[3] = as.list(anova(mod_inf_gam_sr$gam))$s.table[1,3]
+modcomp$K_GAMM_P[3]=as.list(anova(mod_inf_gam_sr$gam))$s.table[1,4]
+modcomp$K_edf[3] = as.list(anova(mod_inf_gam_sr$gam))$edf[1]
+
+modcomp$K_LME_F[5] = anova(mod_inf_sr_tree,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[5]=anova(mod_inf_sr_tree,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[5] = as.list(anova(mod_k_gam_srtree$gam))$s.table[1,3]
+modcomp$K_GAMM_P[5]=as.list(anova(mod_k_gam_srtree$gam))$s.table[1,4]
+modcomp$K_edf[5] = as.list(anova(mod_k_gam_srtree$gam))$edf[1]
+
+modcomp$K_LME_F[7] = anova(mod_inf_sr_shrub,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[7]=anova(mod_inf_sr_shrub,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[7] = as.list(anova(mod_k_gam_srshrub$gam))$s.table[1,3]
+modcomp$K_GAMM_P[7]=as.list(anova(mod_k_gam_srshrub$gam))$s.table[1,4]
+modcomp$K_edf[7] = as.list(anova(mod_k_gam_srshrub$gam))$edf[1]
+
+modcomp$K_LME_F[9] = anova(mod_inf_sr_grass,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[9]=anova(mod_inf_sr_grass,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[9] = as.list(anova(mod_k_gam_srgrass$gam))$s.table[1,3]
+modcomp$K_GAMM_P[9]=as.list(anova(mod_k_gam_srgrass$gam))$s.table[1,4]
+modcomp$K_edf[9] = as.list(anova(mod_k_gam_srgrass$gam))$edf[1]
+
+modcomp$K_LME_F[11] = anova(mod_inf_sr_forb,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[11]=anova(mod_inf_sr_forb,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[11] = as.list(anova(mod_K_gam_srforb$gam))$s.table[1,3]
+modcomp$K_GAMM_P[11]=as.list(anova(mod_K_gam_srforb$gam))$s.table[1,4]
+modcomp$K_edf[11] = as.list(anova(mod_K_gam_srforb$gam))$edf[1]
+
+modcomp$K_LME_F[4] = anova(mod_inf_ab,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[4]=anova(mod_inf_ab,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[4] = as.list(anova(modK_gam_ab$gam))$s.table[1,3]
+modcomp$K_GAMM_P[4]=as.list(anova(modK_gam_ab$gam))$s.table[1,4]
+modcomp$K_edf[4] = as.list(anova(modK_gam_ab$gam))$edf[1]
+
+modcomp$K_LME_F[6] = anova(mod_inf_ab_tree,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[6]=anova(mod_inf_ab_tree,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[6] = as.list(anova(modK_gam_ab_tree$gam))$s.table[1,3]
+modcomp$K_GAMM_P[6]=as.list(anova(modK_gam_ab_tree$gam))$s.table[1,4]
+modcomp$K_edf[6] = as.list(anova(modK_gam_ab_tree$gam))$edf[1]
+
+modcomp$K_LME_F[8] = anova(mod_inf_ab_shrub,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[8]=anova(mod_inf_ab_shrub,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[8] = as.list(anova(modK_gam_ab_shrub$gam))$s.table[1,3]
+modcomp$K_GAMM_P[8]=as.list(anova(modK_gam_ab_shrub$gam))$s.table[1,4]
+modcomp$K_edf[8] = as.list(anova(modK_gam_ab_shrub$gam))$edf[1]
+
+modcomp$K_LME_F[10] = anova(mod_inf_ab_grass,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[10]=anova(mod_inf_ab_grass,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[10] = as.list(anova(modK_gam_ab_grass$gam))$s.table[1,3]
+modcomp$K_GAMM_P[10]=as.list(anova(modK_gam_ab_grass$gam))$s.table[1,4]
+modcomp$K_edf[10] = as.list(anova(modK_gam_ab_grass$gam))$edf[1]
+
+modcomp$K_LME_F[12] = anova(mod_inf_ab_forb,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[12]=anova(mod_inf_ab_forb,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[12] = as.list(anova(modK_gam_ab_forb$gam))$s.table[1,3]
+modcomp$K_GAMM_P[12]=as.list(anova(modK_gam_ab_forb$gam))$s.table[1,4]
+modcomp$K_edf[12] = as.list(anova(modK_gam_ab_forb$gam))$edf[1]
+
+modcomp$K_LME_F[15] = anova(mod_inf_relab_per,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[15]=anova(mod_inf_relab_per,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[15] = as.list(anova(modK_gam_per$gam))$s.table[1,3]
+modcomp$K_GAMM_P[15]=as.list(anova(modK_gam_per$gam))$s.table[1,4]
+modcomp$K_edf[15] = as.list(anova(modK_gam_per$gam))$edf[1]
+
+modcomp$K_LME_F[17] = anova(mod_inf_relab_tap,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[17]=anova(mod_inf_relab_tap,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[17] = as.list(anova(mod_K_gam_tap_ab$gam))$s.table[1,3]
+modcomp$K_GAMM_P[17]=as.list(anova(mod_K_gam_tap_ab$gam))$s.table[1,4]
+modcomp$K_edf[17] = as.list(anova(mod_K_gam_tap_ab$gam))$edf[1]
+
+modcomp$K_LME_F[18] = anova(mod_inf_relab_leg,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[18]=anova(mod_inf_relab_leg,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[18] = as.list(anova(mod_inf_gam_relab_leg$gam))$s.table[1,3]
+modcomp$K_GAMM_P[18]=as.list(anova(mod_inf_gam_relab_leg$gam))$s.table[1,4]
+modcomp$K_edf[18] = as.list(anova(mod_inf_gam_relab_leg$gam))$edf[1]
+
+modcomp$K_LME_F[16] = anova(mod_inf_relab_vegrep,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[16]=anova(mod_inf_relab_vegrep,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[16] = as.list(anova(mod_inf_gam_relab_vegrep$gam))$s.table[1,3]
+modcomp$K_GAMM_P[16]=as.list(anova(mod_inf_gam_relab_vegrep$gam))$s.table[1,4]
+modcomp$K_edf[16] = as.list(anova(mod_inf_gam_relab_vegrep$gam))$edf[1]
+
+modcomp$K_LME_F[19] = anova(mod_inf_fdis,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[19]=anova(mod_inf_fdis,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[19] = as.list(anova(mod_inf_gam_fdis$gam))$s.table[1,3]
+modcomp$K_GAMM_P[19]=as.list(anova(mod_inf_gam_fdis$gam))$s.table[1,4]
+modcomp$K_edf[19] = as.list(anova(mod_inf_gam_fdis$gam))$edf[1]
+
+modcomp$K_LME_F[20] = anova(mod_inf_fdis_h,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[20]=anova(mod_inf_fdis_h,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[20] = as.list(anova(mod_inf_gam_fdis_h$gam))$s.table[1,3]
+modcomp$K_GAMM_P[20]=as.list(anova(mod_inf_gam_fdis_h$gam))$s.table[1,4]
+modcomp$K_edf[20] = as.list(anova(mod_inf_gam_fdis_h$gam))$edf[1]
+
+modcomp$K_LME_F[21] = anova(mod_inf_fdis_sla,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[21]=anova(mod_inf_fdis_sla,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[21] = as.list(anova(mod_K_data_t2$gam))$s.table[1,3]
+modcomp$K_GAMM_P[21]=as.list(anova(mod_K_data_t2$gam))$s.table[1,4]
+modcomp$K_edf[21] = as.list(anova(mod_K_data_t2$gam))$edf[1]
+
+modcomp$K_LME_F[22] = anova(mod_inf_fdis_per,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[22]=anova(mod_inf_fdis_per,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[22] = as.list(anova(mod_inf_gam_fdis_per$gam))$s.table[1,3]
+modcomp$K_GAMM_P[22]=as.list(anova(mod_inf_gam_fdis_per$gam))$s.table[1,4]
+modcomp$K_edf[22] = as.list(anova(mod_inf_gam_fdis_per$gam))$edf[1]
+
+modcomp$K_LME_F[25] = anova(mod_inf_fdis_leg,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[25]=anova(mod_inf_fdis_leg,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[25] = as.list(anova(mod_K_gam_fdis_leg$gam))$s.table[1,3]
+modcomp$K_GAMM_P[25]=as.list(anova(mod_K_gam_fdis_leg$gam))$s.table[1,4]
+modcomp$K_edf[25] = as.list(anova(mod_K_gam_fdis_leg$gam))$edf[1]
+
+modcomp$K_LME_F[23] = anova(mod_inf_fdis_veg,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[23]=anova(mod_inf_fdis_veg,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[23] = as.list(anova(mod_inf_gam_fdis_veg$gam))$s.table[1,3]
+modcomp$K_GAMM_P[23]=as.list(anova(mod_inf_gam_fdis_veg$gam))$s.table[1,4]
+modcomp$K_edf[23] = as.list(anova(mod_inf_gam_fdis_veg$gam))$edf[1]
+
+modcomp$K_LME_F[24] = anova(mod_inf_fdis_tap,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[24]=anova(mod_inf_fdis_tap,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[24] = as.list(anova(mod_Kgam_fdis_tap$gam))$s.table[1,3]
+modcomp$K_GAMM_P[24]=as.list(anova(mod_Kgam_fdis_tap$gam))$s.table[1,4]
+modcomp$K_edf[24] = as.list(anova(mod_Kgam_fdis_tap$gam))$edf[1]
+
+modcomp$K_LME_F[13] = anova(mod_inf_cwm_h,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[13]=anova(mod_inf_cwm_h,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[13] = as.list(anova(mod_Kgam_cwm_h$gam))$s.table[1,3]
+modcomp$K_GAMM_P[13]=as.list(anova(mod_Kgam_cwm_h$gam))$s.table[1,4]
+modcomp$K_edf[13] = as.list(anova(mod_Kgam_cwm_h$gam))$edf[1]
+
+modcomp$K_LME_F[14] = anova(mod_inf_cwm_sla,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[14]=anova(mod_inf_cwm_sla,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[14] = as.list(anova(mod_Kgam_cwm_sla$gam))$s.table[1,3]
+modcomp$K_GAMM_P[14]=as.list(anova(mod_Kgam_cwm_sla$gam))$s.table[1,4]
+modcomp$K_edf[14] = as.list(anova(mod_Kgam_cwm_sla$gam))$edf[1]
+
+modcomp$K_LME_F[26] = anova(mod_inf_comp1,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[26]=anova(mod_inf_comp1,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[26] = as.list(anova(mod_inf_gam_comp_pc1$gam))$s.table[1,3]
+modcomp$K_GAMM_P[26]=as.list(anova(mod_inf_gam_comp_pc1$gam))$s.table[1,4]
+modcomp$K_edf[26] = as.list(anova(mod_inf_gam_comp_pc1$gam))$edf[1]
+
+modcomp$K_LME_F[27] = anova(mod_inf_comp2,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[27]=anova(mod_inf_comp2,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[27] = as.list(anova(mod_inf_gam_comp_pc2$gam))$s.table[1,3]
+modcomp$K_GAMM_P[27]=as.list(anova(mod_inf_gam_comp_pc2$gam))$s.table[1,4]
+modcomp$K_edf[27] = as.list(anova(mod_inf_gam_comp_pc2$gam))$edf[1]
+
+modcomp$K_LME_F[28] = anova(mod_inf_comp3,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[28]=anova(mod_inf_comp3,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[28] = as.list(anova(mod_inf_gam_comp_pc3$gam))$s.table[1,3]
+modcomp$K_GAMM_P[28]=as.list(anova(mod_inf_gam_comp_pc3$gam))$s.table[1,4]
+modcomp$K_edf[28] = as.list(anova(mod_inf_gam_comp_pc3$gam))$edf[1]
+
+modcomp$K_LME_F[29] = anova(mod_inf_comp4,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[29]=anova(mod_inf_comp4,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[29] = as.list(anova(mod_inf_gam_comp_pc4$gam))$s.table[1,3]
+modcomp$K_GAMM_P[29]=as.list(anova(mod_inf_gam_comp_pc4$gam))$s.table[1,4]
+modcomp$K_edf[29] = as.list(anova(mod_inf_gam_comp_pc4$gam))$edf[1]
+
+modcomp$K_LME_F[30] = anova(mod_inf_comp5,type="marginal")$'F-value'[2]
+modcomp$K_LME_P[30]=anova(mod_inf_comp5,type="marginal")$'p-value'[2]
+modcomp$K_GAMM_F[30] = as.list(anova(mod_inf_gam_comp_pc5$gam))$s.table[1,3]
+modcomp$K_GAMM_P[30]=as.list(anova(mod_inf_gam_comp_pc5$gam))$s.table[1,4]
+modcomp$K_edf[30] = as.list(anova(mod_inf_gam_comp_pc5$gam))$edf[1]
+
+modcomp
+
+write.xlsx(modcomp,file="table3.xlsx",rownames=T,colnames=T)
+
+### Creating model comparison table
+
+model_names = read.xlsx("./model_names.xlsx", check.names=F,sheet = "Feuil1", rowNames = F, colNames = T)
+comparison = data.frame(matrix(nrow=nrow(model_names),ncol=4))
+colnames(comparison) = c("Model","AIC","LR","p")
+
+for (i in 1:nrow(model_names)){
+  comparison[i,1] = model_names[i,1]
+  comparison[i,2] = AIC(get(model_names[i,1]))}
+for (i in 1:120){
+  if(i<61){
+    if(i>2){
+      if((i %% 2)==0){
+      comparison[i,3] = lrtest(get(model_names[i,1]),m_C_soil_gam)$Chisq[2]
+      comparison[i,4] = lrtest(get(model_names[i,1]),m_C_soil_gam)$'Pr(>Chisq)'[2]}
+      else {comparison[i,3] = anova(get(model_names[i,1]),m_C_soil)$L.Ratio[2]
+      comparison[i,4] = anova(get(model_names[i,1]),m_C_soil)$'p-value'[2]}}}
+    if(i>62){
+      if((i%%2)==0){
+      comparison[i,3] = lrtest(get(model_names[i,1]),mod_k_gam_base)$Chisq[2]
+      comparison[i,4] = lrtest(get(model_names[i,1]),mod_k_gam_base)$'Pr(>Chisq)'[2]}
+      else{comparison[i,3] = anova(get(model_names[i,1]),mod_K_soil)$L.Ratio[2]
+      comparison[i,4] = anova(get(model_names[i,1]),mod_K_soil)$'p-value'[2]}}
+    }
+
+row_odd = seq_len(nrow(comparison)) %% 2
+
+table_lme = comparison[seq_len(nrow(comparison)) %% 2 == 1,]
+table_gam = comparison[seq_len(nrow(comparison)) %% 2 == 0,]
+
+table_lme
+table_gam
+
+
+
+
+

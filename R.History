@@ -1,4 +1,4 @@
-#######################################################################################################################################################################################
+ #######################################################################################################################################################################################
 ## Berenger Bourgeois # July 2021 # Modifications Poliana- August 2021 to October 2022
 ## Dataset : Poliana vacant lots project
 #####################################################################################################################################################################################
@@ -13,7 +13,8 @@ library(openxlsx); library(MuMIn);library(nlme);library(FSA);library(lmtest)
 library(car);library(emmeans) ; library(multcomp) ; library(FD) 
 library(vegan); library(Hmisc);library(CARBayes); library(spdep)
 library(mgcv); library(ggplot2);library(dplyr);library(stringr)
-library(ggrepel);library(gridExtra);library(multipanelfigure)
+library(ggrepel);library(gridExtra);library(multipanelfigure);library(sjstats)
+library(corrplot);library(psych)
 
 windowsFonts(A = windowsFont("Times New Roman"))
 
@@ -24,7 +25,7 @@ data_VL = read.xlsx("./soil_vs_plant_table_LTC.xlsx", check.names=F,sheet = "Dat
 funct_group = read.xlsx("./soil_vs_plant_table_LTC.xlsx", sheet = "Traits", rowNames = F, colNames = T)
 #Make type of lot a factor
 data_VL$Type_Lot = factor(data_VL$Type_Lot, levels = c("Lawn", "BareSoil", "LowDensHerb", "HighDensHerb", "SparseTrees"))
-data_VL$Type2[data_VL$Type_Lot=="BareSoil"] <- "Bare Soil";data_VL$Type2[data_VL$Type_Lot=="Lawn"] <- "Lawn"
+data_VL$Type2[data_VL$Type_Lot=="BareSoil"] <- "Bare Soil";data_VL$Type2[data_VL$Type_Lot=="Lawn"] <- "Managed Grass"
 data_VL$Type2[data_VL$Type_Lot=="LowDensHerb"] <- "Low-Density Herbaceous"
 data_VL$Type2[data_VL$Type_Lot=="HighDensHerb"] <- "High-Density Herbaceous"
 data_VL$Type2[data_VL$Type_Lot=="SparseTrees"] <- "Sparse Trees"
@@ -67,12 +68,12 @@ sp_fig<-sp%>% filter(rownames (sp) %in% c("Populus.balsamifera","Populus.tremulo
                               "Fragaria.virginiana","Festuca.sp."))
 ### Figure PCA
 COMP<-ggplot()+geom_point(data = st,aes(PC1,PC2,shape=grp$group,col=grp$group),size=2)+
-      scale_shape_manual(name="Land cover",labels=c("Lawn (LA)","Bare Soil (BS)","Low-Density Herbaceous (LDH)",
+      scale_shape_manual(name="Land cover",labels=c("Managed Grass (MG)","Bare Soil (BS)","Low-Density Herbaceous (LDH)",
                                                      "High-Density Herbaceous (HDH)","Sparse Trees (ST)"),
                      values=c(17,15,17,17,19))+
-      scale_color_manual(name="land cover",labels=c("Lawn (LA)","Bare Soil (BS)","Low-Density Herbaceous (LDH)",
+      scale_color_manual(name="land cover",labels=c("Managed Grass (MG)","Bare Soil (BS)","Low-Density Herbaceous (LDH)",
                                                 "High-Density Herbaceous (HDH)","Sparse Trees (ST)"),
-                   values=c("brown1","darkgoldenrod4","darkgoldenrod1","chartreuse2","chartreuse4"))+
+                   values=c("#7E1397","#BA29CF","#92D3A2","#22B65A","#138B33"))+
       labs(x=paste("PC 1 (", format(100 *ii$cont[[1]][2,1], digits=2), "%)", sep=""),
                   y=paste("PC 2 (", format(100 *ii$cont[[1]][2,2], digits=2), "%)", sep=""))+
   geom_hline(yintercept=0,linetype=3,size=0.5,color="grey")+ 
@@ -120,9 +121,9 @@ COMP_SP<-ggplot()+
                   cex=4,max.overlaps = 80, family = "A",box.padding = 0.5)
 COMP_SP
 
-tiff(filename = "SM_PC5.tif",res=150,width=6,height=4,unit="in")
-COMP_SP
-dev.off()
+# tiff(filename = "SM_PC5_again.tiff",res=150,width=6,height=4,unit="in")
+# COMP_SP
+# dev.off()
   
 ###############################################
 # uniformize species name between dataset
@@ -181,6 +182,81 @@ data_VL2$Sand[which(data_VL2$Sand == "Loamy Sand")] = "Sand"
 dbfd2<-dbFD(traits2,commu,corr="cailliez", calc.FGR=FALSE)
 data_VL$FDis=dbfd2$FDis
 
+
+## Preparing data for I de Moran test
+data_VL_coords <- data_VL;coordinates(data_VL_coords) <- ~ Longitude + Latitude
+IDs <- row.names(as(data_VL, "data.frame"))
+# # #Queen neighbors , 10 was an arbitraty value decided after looking at neighbors matrix for diff values
+Sy8_nb <- knn2nb(knearneigh(coordinates(data_VL_coords), k=3,longlat=TRUE))
+dsts <- unlist(nbdists(Sy8_nb, coordinates(data_VL_coords)))
+summary(dsts)
+knea<-dnearneigh(coordinates(data_VL_coords),0,6.5,longlat=TRUE)
+neib <- knea; nb<-neib
+# # #plot matrix
+plot(data_VL_coords);plot(nb, coordinates(data_VL_coords), col='red', lwd=2, add=TRUE)
+# # neighbors
+lw <- nb2listw(neib,zero.policy=TRUE)
+
+#######  Abundance ###################
+#### Perennial and Tap Root
+data_VL$relab_perennial = NA; data_VL$relab_taproot = NA; data_VL$relab_legume = NA;
+data_VL$relab_vegrep = NA
+
+for (i in 1:nrow(data_VL)) {
+  Xsite = data_VL[i, which(colnames(data_VL) == "Abies.balsamea"):which(colnames(data_VL) == "Vitis.riparia")]
+  a = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(traits_VL$Perennial == 1)])]) 
+  b = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(traits_VL$Tap.Root.Present == 1)])])
+  c = sum(Xsite[,which(colnames(Xsite) %in% funct_group$Species[which(traits_VL$Legume == 1)])])
+  d = sum(Xsite[,which(colnames(Xsite) %in% funct_group$Species[which(traits_VL$Vegetative.Reproduction == 1)])])
+  data_VL$relab_perennial[i] = a/data_VL$TotAb[i]
+  data_VL$relab_taproot[i] = b/data_VL$TotAb[i]
+  data_VL$relab_legume[i] = c/data_VL$TotAb[i]
+  data_VL$relab_vegrep[i] = d/data_VL$TotAb[i]}
+
+
+################ Fdis Height ###################
+height = traits_VL[,2,drop = FALSE]
+dbfd2h<-dbFD(height,commu,calc.FGR=FALSE)
+data_VL$Fdis_height = dbfd2h$FDis
+
+
+######################### SLA #############
+############## All species ###############
+sla = traits2[,2,drop = FALSE]
+sla_n = na.omit(sla)
+list = rownames(sla_n)
+commu_n = commu [,which(colnames(commu) %in% list)]
+rownames(sla_n)==colnames(commu_n)
+dbfd2s<- dbFD(sla_n, commu_n, corr="cailliez", calc.FGR=FALSE)
+data_VL$Fdis_sla = dbfd2s$FDis
+
+############ Vegetative ###############
+vegetative = traits2[,4,drop=FALSE]
+dbfsv = dbFD(vegetative,commu)
+data_VL$Fdis_veg = dbfsv$FDis
+
+#################### Perennial
+perennial = traits2[,3,drop=FALSE]
+dbfdp = dbFD(perennial, commu, calc.FGR = FALSE)
+data_VL$Fdis_perennial = dbfdp$FDis
+
+####### Legume ######
+legume = traits2[,6,drop=F]
+dbfl = dbFD(legume,commu)
+data_VL$Fdis_leg = dbfl$FDis
+
+###### Tap Root ######
+taproot = traits2[,5,drop=F]
+taproot_na = na.omit(taproot); list = rownames(taproot_na)
+commu_tapna = commu[,which(colnames(commu) %in% list)]
+dbftap = dbFD(taproot_na,commu_tapna)
+data_VL$fdis_tap = dbftap$FDis
+
+################## CWM #############################
+data_VL$CWM_height = dbfd2$CWM[,1]
+data_VL$CWM_sla = dbfd2$CWM[,2]
+
+
 ### Lot Effect on main response variables###############################################
 
 sr_lot = lme(spe_rich ~ Type_Lot,data = data_VL,
@@ -206,10 +282,8 @@ SR_LOT<-ggplot(data = data_VL, aes(Type_Lot,spe_rich,fill=Type_Lot))+ ylim(0,28)
   geom_text(x= 3, y= 27, label= "ab",size=4, family = "A")+
   geom_text(x= 4, y= 27, label = "ab",size=4, family = "A")+
   geom_text(x=5, y= 27, label="b",size=4, family = "A")+
-  scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+ 
-  scale_fill_manual(values=c("brown1","darkgoldenrod4",
-                             "darkgoldenrod1","chartreuse2",
-                             "chartreuse4"))+ggtitle(label="LMM"~r^2~"= 0.21 p = 0.005")
+  scale_x_discrete(labels=c("MG","BS","LDH","HDH","ST"))+ 
+  scale_fill_manual(values=c("#7E1397","#BA29CF","#92D3A2","#22B65A","#138B33"))+ggtitle(label="LMM"~r^2~"= 0.21 p = 0.005")
 
 SR_LOT
 
@@ -237,10 +311,8 @@ AB_LOT<-ggplot(data = data_VL, aes(Type_Lot,TotAb^(1/3),fill=Type_Lot))+
   geom_text(x= 3, y= 7, label= "b",size=4, family = "A")+
   geom_text(x= 4, y= 7, label = "c",size=4, family = "A")+
   geom_text(x=5, y= 7, label="d",size=4, family = "A")+
-  scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+ 
-  scale_fill_manual(values=c("brown1","darkgoldenrod4",
-                             "darkgoldenrod1","chartreuse2",
-                             "chartreuse4"))+ggtitle(label="LMM"~r^2~"= 0.76 p < 0.001")
+  scale_x_discrete(labels=c("MG","BS","LDH","HDH","ST"))+ 
+  scale_fill_manual(values=c("#7E1397","#BA29CF","#92D3A2","#22B65A","#138B33"))+ggtitle(label="LMM"~r^2~"= 0.76 p < 0.001")
 AB_LOT
 
 
@@ -267,16 +339,14 @@ FDIS_LOT<-ggplot(data = data_VL, aes(Type_Lot,sqrt(FDis),fill=Type_Lot))+ ylim(0
   geom_text(x= 4, y= 0.65, label = "b",size=4, family = "A")+
   geom_text(x=5, y= 0.65, label="ab",size=4, family = "A")+
   scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+ 
-  scale_fill_manual(values=c("brown1","darkgoldenrod4",
-                             "darkgoldenrod1","chartreuse2",
-                             "chartreuse4"))+ggtitle(label="LMM"~r^2~"= 0.14 p = 0.012")
+  scale_fill_manual(values=c("#7E1397","#BA29CF","#92D3A2","#22B65A","#138B33"))+ggtitle(label="LMM"~r^2~"= 0.14 p = 0.012")
 FDIS_LOT
 
 library(cowplot)
 legend<-cowplot::get_legend(COMP)
 plot(legend)
 
-tiff(filename="Figure1_composite_new32_lowres2.tiff",res=150,width=8.5, height=6.5, units="in")
+tiff(filename="Figure3_300_SUBMIT.tiff",res=300,width=8.5, height=6.5, units="in")
 figure1<- multi_panel_figure(columns=18,rows=2, panel_label_type = "none")
 figure1%<>%
    fill_panel(SR_LOT,column = 1:6, row=1)%<>%
@@ -286,7 +356,7 @@ figure1%<>%
 #%<>%
  #  fill_panel(COMP_SP,column=1:5,row=2)
  figure1
- dev.off()
+dev.off()
  
 #####################################################################################################################################################################################
 ##################################### CARBON TIME!!!! ##############################################################################################################################
@@ -295,24 +365,9 @@ figure1%<>%
 
 # INVESTIGATING THE COVARIATE EFFECT ON CARBON STORAGE
 #Correlation among covariates
-cor.table = data_VL[,c("Compacteness","Date.Vacant","Date.Deforested","Sand","Clay","Silt")]
+cor.table = data_VL[,c("Compacteness","Date.Vacant","Date.Deforested","Date.Last.Crop","Sand","Clay","Silt")]
 cor = cor(cor.table,method="pearson")
 rcorr(as.matrix(cor.table), type ="pearson")
-
-## Preparing data for I de Moran test
-data_VL_coords <- data_VL;coordinates(data_VL_coords) <- ~ Longitude + Latitude
-IDs <- row.names(as(data_VL, "data.frame"))
-# # #Queen neighbors , 10 was an arbitraty value decided after looking at neighbors matrix for diff values
-Sy8_nb <- knn2nb(knearneigh(coordinates(data_VL_coords), k=3,longlat=TRUE))
-dsts <- unlist(nbdists(Sy8_nb, coordinates(data_VL_coords)))
-summary(dsts)
-knea<-dnearneigh(coordinates(data_VL_coords),0,6.5,longlat=TRUE)
-neib <- knea; nb<-neib
-# # #plot matrix
-plot(data_VL_coords);plot(nb, coordinates(data_VL_coords), col='red', lwd=2, add=TRUE)
-# # neighbors
-lw <- nb2listw(neib,zero.policy=TRUE)
-
 
 #Covariates Model
 mod_C_cov = lme(sqrt(Cmass_10cm_Kgm2) ~ Sand + Compacteness + Date.Deforested + Date.Vacant, 
@@ -339,7 +394,6 @@ scale_colour_gradientn(colours = terrain.colors(10)) +
 geom_point(size = 3)
 moran.mc(res_mod_C_cov, lw, 10000,zero.policy=TRUE)
 moran.mc(res_mod_C_cov_gam, lw, 10000,zero.policy=TRUE)
-
 
 ############################################################################################################
 ### BASELINE MODEL
@@ -372,7 +426,7 @@ new = newdata %>% group_by(Sand) %>% summarize(fit = median(fit),
 SAND<-ggplot(data = data_VL, aes(Sand,sqrt(Cmass_10cm_Kgm2)))+ theme_classic()+
   geom_point(alpha=0.5)+labs(x="Sand %", y= expression(sqrt("C mass (Kg/"~m^2~")")))+
   theme(title=element_text(size=18),axis.text.y=element_text(size=18),axis.text.x=element_text(size=18),
-        axis.title.y=element_text(size=24),
+        axis.title.y=element_blank(),
         axis.title.x = element_text(size=24),text=element_text(family="A"))+
   geom_line(data=new,aes(y=fit), size=1)+
         geom_ribbon(data=new,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15,
@@ -402,7 +456,7 @@ C_TYPE<-ggplot(data = data_VL, aes(Type_Lot,sqrt(Cmass_10cm_Kgm2),
     geom_boxplot(notch = F, size=0.70)+
     theme_classic()+
     theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
-          axis.title.x=element_blank(),axis.title.y = element_blank(),
+          axis.title.x=element_blank(),axis.title.y = element_text(size=24),
           text=element_text(family="A"))+
     labs(x="",y=expression(sqrt("C mass (Kg/"~m^2~")")))+
     geom_text(x= 1, y= 3.1, label= "c",size=6, family="A")+
@@ -411,13 +465,119 @@ C_TYPE<-ggplot(data = data_VL, aes(Type_Lot,sqrt(Cmass_10cm_Kgm2),
     geom_text(x= 4, y= 3.1, label = "bc",size=6, family="A")+
     geom_text(x=5, y=3.1, label="b",size=6, family="A")+theme(legend.position="none")+
   theme(axis.text.x = element_text(angle = 35, vjust = 1, hjust=1),title=element_text(size=18))+
-  scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+
-  scale_fill_manual(values=c("brown1","darkgoldenrod4",
-                             "darkgoldenrod1","chartreuse2",
-                             "chartreuse4"))+
+  scale_x_discrete(labels=c("MG","BS","LDH","HDH","ST"))+
+  scale_fill_manual(values=c("#7E1397","#BA29CF","#92D3A2","#22B65A","#138B33"))+
                                ggtitle(label="LMM"~r^2~"= 0.46 p < 0.001")+
   annotate(geom="text",label="4.8")
 C_TYPE
+
+#######Stepwise regression
+data.gam <- data_VL %>% select("CWM_sla","CWM_height","Sand","fdis_tap","Fdis_leg","Fdis_veg","Fdis_perennial",
+                               "Fdis_sla","Fdis_height","FDis","PC5","PC4","PC3","PC2","PC1","relab_vegrep",
+                               "relab_taproot","relab_perennial","relab_legume","Ab_Forb","Ab_Herbaceous_Grass",
+                               "Ab_Shrub","Ab_Tree","TotAb","Spe_rich_Forb","Spe_rich_Herbaceous_Grass",
+                               "Spe_rich_Shrub","Spe_rich_Tree","spe_rich")
+colnames(data.gam)<-c("CWM SLA","CWM Height","Sand","FDis Root Morphology","FDis legume","FDis Reprod. Modes",
+                      "FDis Lifespan",
+                      "FDis SLA","FDis Height","FDis Total","PC5","PC4","PC3","PC2","PC1","Dominance Veg. Reprod.",
+                      "Dominance Taproot","Dominance Perennials","Dominance Legume","Forb cover",
+                      "Grass cover",
+                      "Shrub cover","Tree cover","Total cover","Forb Spe. Richness","Grass Spe. Richness",
+                      "Shrub Spe. Richness","Tree Spe. Richness","Species Richness")
+
+x=corr.test(data.gam,method="pearson")
+#tiff(filename="correlation_plants.tiff",res=300,width=10, height=10, units="in")
+corrplot(corr=x$r,p.mat=x$p,method="color",type="lower", tl.col="black",
+         sig.level = 0.05, 
+         pch.cex=0.8)
+#dev.off()
+
+#write.csv(x,file="correlations_plants.csv")
+
+
+# Manual stepwise selection read gam.selection mgcv package description
+
+full.model.gam = gamm(sqrt(Cmass_10cm_Kgm2) ~ s(CWM_sla) + s(CWM_height) + s(Sand,k=8) + s(fdis_tap) + 
+                        s(Fdis_leg) + s(Fdis_veg) + s(Fdis_perennial) + s(Fdis_sla) +
+                        s(FDis)  + s(PC5) + s(PC4) + s(PC3) + s(PC1) + s(relab_vegrep)+
+                        s(relab_taproot) + s(relab_perennial) + s(relab_legume) + s(Ab_Forb) +
+                        s(Ab_Herbaceous_Grass) + s(Ab_Shrub) + s(TotAb) +
+                        s(Spe_rich_Herbaceous_Grass,k=8) + s(spe_rich), data = data_VL, random=list(Lot=~1),method="REML")
+summary.gam(full.model.gam$gam)
+gam.check(full.model.gam$gam)
+AIC(full.model.gam)
+rmse(full.model.gam$gam)
+
+step.model.gam = gamm(sqrt(Cmass_10cm_Kgm2) ~  s(Sand,k=8) + 
+                        s(FDis) + s(PC4) + s(PC3) + 
+                        s(Ab_Forb) +
+                        s(Ab_Herbaceous_Grass), data = data_VL, random=list(Lot=~1),method="ML")
+summary.gam(step.model.gam$gam)
+gam.check(step.model.gam$gam)
+AIC(step.model.gam)
+rmse(step.model.gam$gam)
+
+
+full.model = lme(sqrt(Cmass_10cm_Kgm2) ~ CWM_sla + CWM_height + Sand + fdis_tap + 
+                   Fdis_leg + Fdis_veg + Fdis_perennial + Fdis_sla + FDis +
+                   PC5 + PC4 + PC3 + PC1 + relab_vegrep +
+                   relab_taproot + relab_perennial + relab_legume + Ab_Forb +
+                   Ab_Herbaceous_Grass + Ab_Shrub +TotAb +
+                   Spe_rich_Herbaceous_Grass +
+                   spe_rich, 
+                 data = data_VL, random=~1|Lot,method="ML")
+summary(full.model)
+r.squaredGLMM(full.model);AIC(full.model);rmse(full.model)
+
+step.model <- stepAIC(full.model, direction = "both")
+summary(step.model)
+r.squaredGLMM(step.model);AIC(step.model);rmse(step.model)
+step.model$anova
+
+### spontaneous
+
+spontaneous<- filter(data_VL, Type_Lot != list("Lawn","SparseTrees"))
+spontaneous.d <- spontaneous %>% select("CWM_sla","CWM_height","Sand","fdis_tap","Fdis_leg","Fdis_veg","Fdis_perennial",
+                               "Fdis_sla","Fdis_height","FDis","PC5","PC4","PC3","PC2","PC1","relab_vegrep",
+                               "relab_taproot","relab_perennial","relab_legume","Ab_Forb","Ab_Herbaceous_Grass",
+                               "Ab_Shrub","Ab_Tree","TotAb","Spe_rich_Forb","Spe_rich_Herbaceous_Grass",
+                               "Spe_rich_Shrub","Spe_rich_Tree","spe_rich")
+colnames(spontaneous.d)<-c("CWM SLA","CWM Height","Sand","FDis Root Morphology","FDis legume","FDis Reprod. Modes",
+                      "FDis Lifespan",
+                      "FDis SLA","FDis Height","FDis Total","PC5","PC4","PC3","PC2","PC1","Dominance Veg. Reprod.",
+                      "Dominance Taproot","Dominance Perennials","Dominance Legume","Forb cover",
+                      "Grass cover",
+                      "Shrub cover","Tree cover","Total cover","Forb Spe. Richness","Grass Spe. Richness",
+                      "Shrub Spe. Richness","Tree Spe. Richness","Species Richness")
+cor<-corr.test(spontaneous.d,method="pearson")
+corrplot(corr=cor$r,p.mat=cor$p,method="color",type="lower", tl.col="black",
+         sig.level = 0.05, 
+         pch.cex=0.8)
+cor$r >=0.7
+
+full.model = lme(sqrt(Cmass_10cm_Kgm2) ~ CWM_sla + CWM_height + Sand + fdis_tap + 
+                   Fdis_leg + Fdis_veg + Fdis_perennial + Fdis_sla +
+                   relab_vegrep+
+                   relab_taproot + relab_perennial + relab_legume + Ab_Forb +
+                   Ab_Herbaceous_Grass + Ab_Shrub +
+                   Spe_rich_Herbaceous_Grass+spe_rich, 
+                 data = spontaneous, random=~1|Lot,method="ML")
+summary(full.model)
+r.squaredGLMM(full.model);AIC(full.model);rmse(full.model)
+
+step.model <- stepAIC(full.model, direction = "both")
+summary(step.model)
+r.squaredGLMM(step.model);AIC(step.model);rmse(step.model)
+step.model$anova
+
+spontaneous$fit = predict(step.model)
+
+ggplot(spontaneous,aes(Sand,sqrt(Cmass_10cm_Kgm2))) + 
+  #geom_line(aes(y=fit,x=Sand), size=0.8) +
+  geom_smooth(method="lm",se=T,size=1,col="black")+
+  geom_point(alpha = 0.3) +
+  theme_bw()
+
 
 #######################################################################################################################################################################################
 # TOTAL/GROUP RICHNESS EFFECT ON CARBON STORAGE (from baseline model)
@@ -654,22 +814,6 @@ C_FORB_AB<-ggplot(data= data_VL,aes(Ab_Forb,sqrt(Cmass_10cm_Kgm2)))+
   ggtitle(label="GAMM"~r^2~"= 0.24 p = 0.043")
  C_FORB_AB
 
-#######  Abundance ###################
-#### Perennial and Tap Root
-data_VL$relab_perennial = NA; data_VL$relab_taproot = NA; data_VL$relab_legume = NA;
-data_VL$relab_vegrep = NA
-
-for (i in 1:nrow(data_VL)) {
-  Xsite = data_VL[i, which(colnames(data_VL) == "Abies.balsamea"):which(colnames(data_VL) == "Vitis.riparia")]
-  a = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(traits_VL$Perennial == 1)])]) 
-  b = sum(Xsite[,which(colnames(Xsite)  %in% funct_group$Species[which(traits_VL$Tap.Root.Present == 1)])])
-  c = sum(Xsite[,which(colnames(Xsite) %in% funct_group$Species[which(traits_VL$Legume == 1)])])
-  d = sum(Xsite[,which(colnames(Xsite) %in% funct_group$Species[which(traits_VL$Vegetative.Reproduction == 1)])])
-  data_VL$relab_perennial[i] = a/data_VL$TotAb[i]
-  data_VL$relab_taproot[i] = b/data_VL$TotAb[i]
-  data_VL$relab_legume[i] = c/data_VL$TotAb[i]
-  data_VL$relab_vegrep[i] = d/data_VL$TotAb[i]}
-
 mod_ab_leg = lme(sqrt(Cmass_10cm_Kgm2) ~ relab_legume + Sand, 
                  random = ~ 1|Lot, method = "REML", data = data_VL)
 res_mod_ab_leg = residuals(mod_ab_leg)
@@ -862,11 +1006,6 @@ C_FDIS<-ggplot(data= data_VL,aes(FDis,sqrt(Cmass_10cm_Kgm2)))+theme_classic()+
 
 C_FDIS
 
-################ Fdis Height ###################
-height = traits_VL[,2,drop = FALSE]
-dbfd2h<-dbFD(height,commu,calc.FGR=FALSE)
-data_VL$Fdis_height = dbfd2h$FDis
-
 mod_C_fdis_height = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_height + Sand, 
                         data = data_VL, random = ~1|Lot, method="REML")
 res_mod_C_fdis_height = residuals(mod_C_fdis_height)
@@ -883,15 +1022,6 @@ gam.check(modC_gam_fheight$gam);anova(modC_gam_fheight$gam)
 lrtest(modC_gam_fheight,m_C_soil_gam);AIC(modC_gam_fheight)
 RSS<-c(crossprod(res_modC_gam_fheight));MSE<-RSS/length(res_modC_gam_fheight);RMSE<-sqrt(MSE);RMSE
 
-######################### SLA #############
-############## All species ###############
-sla = traits2[,2,drop = FALSE]
-sla_n = na.omit(sla)
-list = rownames(sla_n)
-commu_n = commu [,which(colnames(commu) %in% list)]
-rownames(sla_n)==colnames(commu_n)
-dbfd2s<- dbFD(sla_n, commu_n, corr="cailliez", calc.FGR=FALSE)
-data_VL$Fdis_sla = dbfd2s$FDis
 
 mod_C_fdis_sla = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_sla + Sand, 
                      data = data_VL, random = ~1|Lot, method="REML",
@@ -912,11 +1042,6 @@ gam.check(modC_gam_slafdis$gam);anova.gam(modC_gam_slafdis$gam)
 lrtest(modC_gam_slafdis,m_C_soil_gam);AIC(modC_gam_slafdis)
 RSS<-c(crossprod(res_modC_gam_slafdis));MSE<-RSS/length(res_modC_gam_slafdis);RMSE<-sqrt(MSE);RMSE
 
-#################### Perennial
-perennial = traits2[,3,drop=FALSE]
-dbfdp = dbFD(perennial, commu, calc.FGR = FALSE)
-data_VL$Fdis_perennial = dbfdp$FDis
-
 mod_fdis_per = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_perennial + Sand, 
                    random = ~1|Lot, data= data_VL, method = "REML")
 res_mod_fdis_per = residuals(mod_fdis_per)
@@ -933,10 +1058,7 @@ gam.check(modC_gam_perfdis$gam);anova(modC_gam_perfdis$gam)
 lrtest(modC_gam_perfdis,m_C_soil_gam);AIC(modC_gam_perfdis)
 RSS<-c(crossprod(res_modC_gam_perfdis));MSE<-RSS/length(res_modC_gam_perfdis);RMSE<-sqrt(MSE);RMSE
 
-############ Vegetative ###############
-vegetative = traits2[,4,drop=FALSE]
-dbfsv = dbFD(vegetative,commu)
-data_VL$Fdis_veg = dbfsv$FDis
+
 mod_fdis_veg = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_veg + Sand, 
                    random = ~ 1|Lot, method = "REML", data = data_VL)
 res_mod_fdis_veg = residuals(mod_fdis_veg)
@@ -975,10 +1097,10 @@ C_FDIS_VEG<-ggplot(data= data_VL,aes(Fdis_veg,sqrt(Cmass_10cm_Kgm2)))+theme_clas
 
 C_FDIS_VEG
 
-tiff(filename="Figure2_composite_17_lowres.tiff",res=150,width=16, height=10, units="in")
+tiff(filename="Figure4_300_SUBMIT_1.tiff",res=300,width=16, height=10, units="in")
 figure2<- multi_panel_figure(columns=3,rows=2,panel_label_type = "none" )
 figure2%<>%
-  fill_panel(C_TYPE,column = 3, row=2)%<>%
+  fill_panel(SAND,column = 3, row=2)%<>%
   fill_panel(C_AB,column=1,row=1)%<>%
   fill_panel(C_GRASS_AB,column=2, row=1)%<>%
   fill_panel(C_FORB_AB,column=3,row=1)%<>%
@@ -987,10 +1109,6 @@ figure2%<>%
 figure2
 dev.off()
 
-####### Legume ######
-legume = traits2[,6,drop=F]
-dbfl = dbFD(legume,commu)
-data_VL$Fdis_leg = dbfl$FDis
 mod_fdis_leg = lme(sqrt(Cmass_10cm_Kgm2) ~ Fdis_leg + Sand, 
                    random = ~ 1|Lot, method = "REML", data = data_VL,
                    cor = corSpatial(form = ~ Latitude + Longitude))
@@ -1008,12 +1126,7 @@ gam.check(modC_gam_legfdis$gam);anova.gam(modC_gam_legfdis$gam)
 lrtest(modC_gam_legfdis,m_C_soil_gam);AIC(modC_gam_legfdis)
 RSS<-c(crossprod(res_modC_gam_legfdis));MSE<-RSS/length(res_modC_gam_legfdis);RMSE<-sqrt(MSE);RMSE
 
-###### Tap Root ######
-taproot = traits2[,5,drop=F]
-taproot_na = na.omit(taproot); list = rownames(taproot_na)
-commu_tapna = commu[,which(colnames(commu) %in% list)]
-dbftap = dbFD(taproot_na,commu_tapna)
-data_VL$fdis_tap = dbftap$FDis
+
 mod_fdis_tap = lme(sqrt(Cmass_10cm_Kgm2) ~ fdis_tap + Sand, 
                    random = ~ 1|Lot, method= "REML", data = data_VL)
 res_mod_fdis_tap = residuals(mod_fdis_tap)
@@ -1030,8 +1143,6 @@ gam.check(modC_gam_tapfdis$gam);anova.gam(modC_gam_tapfdis$gam)
 lrtest(modC_gam_tapfdis,m_C_soil_gam);AIC(modC_gam_tapfdis)
 RSS<-c(crossprod(res_modC_gam_tapfdis));MSE<-RSS/length(res_modC_gam_tapfdis);RMSE<-sqrt(MSE);RMSE
 
-################## CWM #############################
-data_VL$CWM_height = dbfd2$CWM[,1]
 mod_C_CWM_height = lme(sqrt(Cmass_10cm_Kgm2) ~ CWM_height + Sand, 
                        random = ~ 1|Lot, data = data_VL, method = "REML")
 res_mod_C_CWM_height = residuals(mod_C_CWM_height)
@@ -1048,7 +1159,6 @@ gam.check(modC_gam_h_cwm$gam);anova.gam(modC_gam_h_cwm$gam)
 lrtest(modC_gam_h_cwm,m_C_soil_gam);AIC(modC_gam_h_cwm)
 RSS<-c(crossprod(res_modC_gam_h_cwm));MSE<-RSS/length(res_modC_gam_h_cwm);RMSE<-sqrt(MSE);RMSE
 
-data_VL$CWM_sla = dbfd2$CWM[,2]
 mod_C_CWM_sla = lme(sqrt(Cmass_10cm_Kgm2) ~ CWM_sla + Sand, 
                     random = ~ 1|Lot, data = data_VL, method = "REML", 
                     #cor = corSpatial(form = ~ Latitude + Longitude)
@@ -1066,6 +1176,9 @@ moran.mc(res_modC_gam_slacwm,lw,10000,zero.policy = T)
 gam.check(modC_gam_slacwm$gam);anova.gam(modC_gam_slacwm$gam)
 lrtest(modC_gam_slacwm,m_C_soil_gam);AIC(modC_gam_slacwm)
 RSS<-c(crossprod(res_modC_gam_slacwm));MSE<-RSS/length(res_modC_gam_slacwm);RMSE<-sqrt(MSE);RMSE
+
+
+
 
 ######################## Infiltration TIME, ignoring lack of homogeneity among soil types
 ###################################################################################
@@ -1143,21 +1256,112 @@ newdata$upper = a$fit + a$se.fit*1.96
 
 K_DV<-ggplot(data = data_t, aes(Date.Vacant,log(K_mm_h)))+theme_classic()+geom_point()+
   labs(x="Date of Vacancy", y=expression(log("K mm/h"))) +
-    theme(title=element_text(size=18),axis.text.y=element_text(size=18),axis.text.x=element_text(size=18),axis.title.y=element_text(size=24),
-        axis.title.x = element_text(size=24),text=element_text(family="A"))+geom_line(data=newdata,aes(y=fit),size=1)+
+    theme(title=element_text(size=18),axis.text.y=element_text(size=22),axis.text.x=element_text(size=22),axis.title.y=element_text(size=22),
+        axis.title.x = element_text(size=22),text=element_text(family="A"))+geom_line(data=newdata,aes(y=fit),size=1)+
   geom_ribbon(data=newdata,aes(y=NULL,ymin=lower,ymax=upper),alpha=0.15)+
   ggtitle(label="GAMM"~r^2~"= 0.08 p = 0.015")+
   scale_x_continuous(labels=paste(seq(1960,2021,20)),breaks=seq(1960,2021,20),limits=c(1948,2021))
 K_DV
 
 
-tiff(filename="FigureSM_composite_1_lowres.tiff",res=150,width=10, height=4, units="in")
-figure4 <- multi_panel_figure(columns=2,rows=1,panel_label_type = "none" )
-figure4%<>%
-  fill_panel(SAND,column=1,row=1)%<>%
- fill_panel(K_DV,column=2,row=1)
-figure4
-dev.off()
+#######Stepwise regression
+data.gam <- data_t %>% select("CWM_sla","CWM_height","Sand","fdis_tap","Fdis_leg","Fdis_veg","Fdis_perennial",
+                               "Fdis_sla","Fdis_height","FDis","PC5","PC4","PC3","PC2","PC1","relab_vegrep",
+                               "relab_taproot","relab_perennial","relab_legume","Ab_Forb","Ab_Herbaceous_Grass",
+                               "Ab_Shrub","Ab_Tree","TotAb","Spe_rich_Forb","Spe_rich_Herbaceous_Grass",
+                               "Spe_rich_Shrub","Spe_rich_Tree","spe_rich","Date.Vacant")
+colnames(data.gam)<-c("CWM SLA","CWM Height","Sand","FDis Root Morphology","FDis legume","FDis Reprod. Modes",
+                      "FDis Lifespan",
+                      "FDis SLA","FDis Height","FDis Total","PC5","PC4","PC3","PC2","PC1","Dominance Veg. Reprod.",
+                      "Dominance Taproot","Dominance Perennials","Dominance Legume","Forb cover",
+                      "Grass cover",
+                      "Shrub cover","Tree cover","Total cover","Forb Spe. Richness","Grass Spe. Richness",
+                      "Shrub Spe. Richness","Tree Spe. Richness","Species Richness","Date Vacancy")
+
+x=corr.test(data.gam,method="pearson")
+#tiff(filename="correlation_plants.tiff",res=300,width=10, height=10, units="in")
+corrplot(corr=x$r,p.mat=x$p,method="color",type="lower", tl.col="black",
+         sig.level = 0.05, 
+         pch.cex=0.8)
+x$r >= 0.7
+
+#dev.off()
+### Full model
+full.model.gam = gamm(log(K_mm_h) ~ s(Date.Vacant,k=5) + s(CWM_sla) + s(CWM_height) + s(fdis_tap) + 
+                        s(Fdis_leg) + s(Fdis_perennial) + s(Fdis_sla) + s(Fdis_veg) +
+                        s(FDis)  + s(PC5) + s(PC4) + s(PC3) + s(PC1) + s(relab_vegrep)+
+                        s(relab_taproot) + s(relab_perennial) + s(relab_legume) + s(Ab_Forb) +
+                        s(Ab_Herbaceous_Grass) + s(Ab_Shrub) + s(TotAb) +
+                        s(Spe_rich_Herbaceous_Grass,k=8) +
+                        s(spe_rich), data = data_t, random=list(Lot=~1),method="REML")
+summary.gam(full.model.gam$gam)
+gam.check(full.model.gam$gam)
+anova(full.model.gam$gam)
+AIC(full.model.gam)
+rmse(full.model.gam$gam)
+
+step.model.gam = gamm(log(K_mm_h) ~ s(Date.Vacant,k=5) + 
+                        s(Fdis_perennial) + 
+                        s(PC5)  +
+                        s(TotAb), data = data_t, random=list(Lot=~1),method="ML")
+summary.gam(step.model.gam$gam)
+gam.check(step.model.gam$gam)
+AIC(step.model.gam)
+rmse(step.model.gam$gam)
+
+
+full.model = lme(log(K_mm_h) ~ Date.Vacant + CWM_sla + CWM_height + fdis_tap + 
+                       Fdis_leg + Fdis_veg + Fdis_perennial + Fdis_sla +
+                       FDis  + PC5 + PC4 + PC3 + PC1 + relab_vegrep+
+                       relab_taproot + relab_perennial + relab_legume + Ab_Forb +
+                       Ab_Herbaceous_Grass + Ab_Shrub + TotAb +
+                       Spe_rich_Herbaceous_Grass +
+                       spe_rich, data = data_t, random=~1|Lot,method="ML")
+summary(full.model)
+r.squaredGLMM(full.model);AIC(full.model);rmse(full.model)
+
+
+step.model <- stepAIC(full.model, direction = "both")
+summary(step.model)
+r.squaredGLMM(step.model);AIC(step.model);rmse(step.model)
+step.model$anova
+
+
+spontaneous<- filter(data_t, Type_Lot != list("Lawn","SparseTrees"))
+spontaneous.d <- spontaneous %>% select("CWM_sla","CWM_height","Sand","fdis_tap","Fdis_leg","Fdis_veg","Fdis_perennial",
+                                        "Fdis_sla","Fdis_height","FDis","PC5","PC4","PC3","PC2","PC1","relab_vegrep",
+                                        "relab_taproot","relab_perennial","relab_legume","Ab_Forb","Ab_Herbaceous_Grass",
+                                        "Ab_Shrub","Ab_Tree","TotAb","Spe_rich_Forb","Spe_rich_Herbaceous_Grass",
+                                        "Spe_rich_Shrub","Spe_rich_Tree","spe_rich")
+colnames(spontaneous.d)<-c("CWM SLA","CWM Height","Sand","FDis Root Morphology","FDis legume","FDis Reprod. Modes",
+                           "FDis Lifespan",
+                           "FDis SLA","FDis Height","FDis Total","PC5","PC4","PC3","PC2","PC1","Dominance Veg. Reprod.",
+                           "Dominance Taproot","Dominance Perennials","Dominance Legume","Forb cover",
+                           "Grass cover",
+                           "Shrub cover","Tree cover","Total cover","Forb Spe. Richness","Grass Spe. Richness",
+                           "Shrub Spe. Richness","Tree Spe. Richness","Species Richness")
+cor<-corr.test(spontaneous.d,method="pearson")
+corrplot(corr=cor$r,p.mat=cor$p,method="color",type="lower", tl.col="black",
+         sig.level = 0.05, 
+         pch.cex=0.8)
+cor$r >=0.7
+
+full.model = lme(log(K_mm_h) ~ Date.Vacant + CWM_sla + CWM_height + fdis_tap + 
+                   Fdis_leg + Fdis_veg + Fdis_perennial + Fdis_sla +
+                   FDis  + PC5 + PC4 + PC3 + PC1 + relab_vegrep+
+                   relab_taproot + relab_perennial + relab_legume + Ab_Forb +
+                   Ab_Herbaceous_Grass + Ab_Shrub + TotAb +
+                   Spe_rich_Herbaceous_Grass +
+                   spe_rich, data = spontaneous, random=~1|Lot,method="ML")
+summary(full.model)
+r.squaredGLMM(full.model);AIC(full.model);rmse(full.model)
+
+
+step.model <- stepAIC(full.model, direction = "both")
+summary(step.model)
+r.squaredGLMM(step.model);AIC(step.model);rmse(step.model)
+step.model$anova
+
 
 
 ### Hypothesis models
@@ -1174,20 +1378,20 @@ K_TYPE<-ggplot(data = data_VL, aes(Type_Lot,log(K_mm_h),fill=Type_Lot))+ ylim(0,
   geom_boxplot(notch = F, size=0.70)+
   theme_classic()+
   theme(axis.text.y=element_text(size=24),axis.text.x=element_text(size=24),
-        axis.title.x=element_blank(),axis.title.y=element_blank(),
+        axis.title.x=element_blank(),axis.title.y=element_text(size=24),
         legend.position = "none",
         text=element_text(family="A"),title=element_text(size=18))+
   labs(x="",y=expression(log("K mm/h")))+
-  geom_text(x= 1, y= 6.4, label= "ab",size=6)+
-  geom_text(x= 2, y= 6.4, label= "b",size=6)+
-  geom_text(x= 3, y= 6.4, label= "ab",size=6)+
-  geom_text(x= 4, y= 6.4, label = "a",size=6)+
-  geom_text(x=5, y= 6.4, label="a",size=6)+
+  geom_text(x= 1, y= 6.4, label= "ab",size=6, family="A")+
+  geom_text(x= 2, y= 6.4, label= "b",size=6, family="A")+
+  geom_text(x= 3, y= 6.4, label= "ab",size=6, family="A")+
+  geom_text(x= 4, y= 6.4, label = "a",size=6, family="A")+
+  geom_text(x=5, y= 6.4, label="a",size=6,family="A")+
   theme(axis.text.x = element_text(angle = 35, vjust = 1, hjust=1))+
-  scale_x_discrete(labels=c("LA","BS","LDH","HDH","ST"))+
-  scale_fill_manual(values=c("brown1","darkgoldenrod4",
-                             "darkgoldenrod1","chartreuse2",
-                             "chartreuse4"))+ggtitle(label="LMM"~r^2~"= 0.28 p = 0.002")
+  scale_x_discrete(labels=c("MG","BS","LDH","HDH","ST"))+
+  scale_fill_manual(values=c("#7E1397","#BA29CF",
+                             "#92D3A2","#22B65A",
+                             "#138B33"))+ggtitle(label="LMM"~r^2~"= 0.28 p = 0.002")
 K_TYPE
 
 # Species Richness
@@ -1882,10 +2086,47 @@ K_PC5<-ggplot(data= data_t,aes(PC5,log(K_mm_h)))+theme_classic()+
   ggtitle(label="LMM"~r^2~"= 0.23 p < 0.001")
 K_PC5
 
-tiff(filename="Figure3_composite8_lowres.tiff",res=150,width=18, height=14, units="in")
-figure3<- multi_panel_figure(columns=4,rows=3,panel_label_type = "none")
+
+COMP_SP2<-ggplot()+
+  geom_hline(yintercept=0,linetype=3,size=0.5) + 
+  geom_vline(xintercept=0,linetype=3,size=0.5)+
+  theme_bw()+theme(panel.grid=element_blank(),axis.text.x = element_text(size=22),
+                   axis.title.x = element_text(size=22),
+                   axis.text.y = element_text(size=22),
+                   axis.title.y = element_text(size=22),
+                   text=element_text(family = "A"))+
+  ylim(-0.7,0.5)+
+  xlim(-1.6,1)+
+  geom_segment(data = sp,aes(x = 0, y = 0, xend = PC1, yend = PC5), 
+               arrow = arrow(angle=22.5,length = unit(0.2,"cm"),
+                             type = "closed"),linetype=1, size=0.5,colour = "gray")+
+  labs(x=paste("PC 1 (", format(100 *ii$cont[[1]][2,1], digits=2), "%)", sep=""),
+       y=paste("PC 5 (", format(100 *ii$cont[[1]][2,5], digits=2), "%)", sep=""))+
+  #geom_text_repel(data = sp,aes(PC1,PC5,label=row.names(sp)),fontface = "italic",
+   #               cex=7.5,max.overlaps = 100, family = "A",box.padding = 2,force=1,
+    #              direction="both")+
+  annotate(geom="text",x=0.5,y=0.39,label="Poa nemoralis",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=0.3,y=0.20,label="Artemisia vulgaris",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=0.6,y=0.25,label="Cichorium intybus",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=-0.2,y=0.45,label="Solidago altissima",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=-1,y=0.18,label="Symphyotrichum lanceolatum",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=-0.4,y=-0.3,label="Populus balsamifera",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=-0.85,y=-0.13,label="Lathyrus pratensis",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=-0.5,y=-0.65,label="Phalaris arundinacea",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=0.2,y=-0.57,label="Tanacetum vulgare",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=0.8,y=-0.46,label="Taraxacum\nofficinale",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=-0.1,y=-0.43,label="Populus tremuloides",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=0.50,y=-0.26,label="Poa annua",family="A",fontface="italic",cex=8)+
+  annotate(geom="text",x=0.63,y=-0.34,label="Festuca sp.",family="A",fontface="italic",cex=8)
+  
+
+COMP_SP2 
+
+
+tiff(filename="Figure5_300_SUBMIT_24.tiff",res=300,width=18, height=18, units="in")
+figure3<- multi_panel_figure(columns=4,rows=4,panel_label_type = "none")
 figure3%<>%
-  fill_panel(K_TYPE,column = 3, row=3)%<>%
+  fill_panel(K_DV,column = 1, row=4)%<>%
   fill_panel(K_SR_T,column=1,row=1)%<>%
   fill_panel(K_AB,column=2,row=1)%<>%
   fill_panel(K_AB_G,column=3,row=1)%<>%
@@ -1895,10 +2136,20 @@ figure3%<>%
   fill_panel(K_FDIS_LS,column=3,row=2)%<>%
   fill_panel(K_FDIS_VEG,column=4,row=2)%<>%
   fill_panel(K_PC1,column=1,row=3)%<>%
-  fill_panel(K_PC5,column=2,row=3)
+  fill_panel(K_PC5,column=2,row=3)%<>%
+  fill_panel(COMP_SP2,column=3:4,row=3:4)
 figure3
 dev.off()
-# 
+
+tiff(filename="Figure6_300_SUBMIT_2.tiff",res=300,width=18, height=7, units="in")
+figure4<- multi_panel_figure(columns=2,rows=1,panel_label_type = "none")
+figure4%<>%
+  fill_panel(C_TYPE,column = 1, row=1)%<>%
+  fill_panel(K_TYPE,column=2,row=1)
+figure4
+dev.off()
+
+
 # jpeg(filename="Figure4_composite.jpg",res=600,width=16, height=8, units="in")
 # figure4<- multi_panel_figure(columns=2,rows=1,panel_label_type = "none")
 # figure4%<>%
@@ -2386,6 +2637,8 @@ table_gam = comparison[seq_len(nrow(comparison)) %% 2 == 0,]
 
 table_lme
 table_gam
+
+
 
 
 
